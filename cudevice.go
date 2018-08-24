@@ -5,12 +5,11 @@
 package main
 
 /*
-#include "decred.h"
+#include "eqcuda1445.h"
 */
 import "C"
 
 import (
-	"encoding/binary"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -20,7 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/barnex/cuda5/cu"
-
+	cptr "github.com/mattn/go-pointer"
 	"github.com/EXCCoin/gominer/nvml"
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
@@ -31,6 +30,24 @@ const (
 	threadsPerBlock = 640
 	blockx          = threadsPerBlock
 )
+
+//export equihashProxy
+func equihashProxy(user_data unsafe.Pointer, solution unsafe.Pointer) C.int {
+	device := cptr.Restore(user_data).(*Device)
+	csol := C.GoBytes(solution, C.int(equihashSolutionSize(144, 5))) // TODO 144, 5 params?
+	device.handleEquihashSolution(csol)
+	return 0
+}
+
+func equihashSolutionSize(n, k int) int {
+	return 1 << uint32(k) * (n/(k+1) + 1) / 8
+}
+
+func (d *Device) handleEquihashSolution(solution []byte) {
+	a := 42
+	_ = a
+	// TODO
+}
 
 // Return the GPU library in use.
 func gpuLib() string {
@@ -89,18 +106,6 @@ type Device struct {
 	invalidShares    uint64
 
 	quit chan struct{}
-}
-
-func decredCPUSetBlock52(input *[320]byte) {
-	if input == nil {
-		panic("input is nil")
-	}
-	C.decred_cpu_setBlock_52((*C.uint32_t)(unsafe.Pointer(input)))
-}
-
-func decredHashNonce(gridx, blockx, threads uint32, startNonce uint32, nonceResults cu.DevicePtr, targetHigh uint32) {
-	C.decred_hash_nonce(C.uint32_t(gridx), C.uint32_t(blockx), C.uint32_t(threads),
-		C.uint32_t(startNonce), (*C.uint32_t)(unsafe.Pointer(nonceResults)), C.uint32_t(targetHigh))
 }
 
 func deviceStats(index int) (uint32, uint32) {
@@ -303,7 +308,7 @@ func (d *Device) runDevice() error {
 	}
 	nonceResultsHSlice := *(*[]uint32)(unsafe.Pointer(&nonceResultsHSliceHeader))
 
-	endianData := new([320]byte)
+	//endianData := new([320]byte)
 
 	for {
 		d.updateCurrentWork()
@@ -318,15 +323,19 @@ func (d *Device) runDevice() error {
 		util.RolloverExtraNonce(&d.extraNonce)
 		d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
 
-		copy(endianData[:], d.work.Data[:128])
-		for i, j := 128, 0; i < 180; {
-			b := make([]byte, 4)
-			binary.BigEndian.PutUint32(b, d.lastBlock[j])
-			copy(endianData[i:], b)
-			i += 4
-			j++
-		}
-		decredCPUSetBlock52(endianData)
+		deviceptr := cptr.Save(d)
+		defer cptr.Unref(deviceptr)
+		C.EquihashSolveCuda(unsafe.Pointer(&d.work.EquihashInput[0]), C.uint64_t(len(d.work.EquihashInput)), C.uint32_t(d.extraNonce), deviceptr)
+
+		//copy(endianData[:], d.work.Data[:128])
+		//for i, j := 128, 0; i < 180; {
+		//	b := make([]byte, 4)
+		//	binary.BigEndian.PutUint32(b, d.lastBlock[j])
+		//	copy(endianData[i:], b)
+		//	i += 4
+		//	j++
+		//}
+		//decredCPUSetBlock52(endianData)
 
 		// Update the timestamp. Only solo work allows you to roll
 		// the timestamp.
@@ -344,16 +353,16 @@ func (d *Device) runDevice() error {
 		// Execute the kernel and follow its execution time.
 		currentTime := time.Now()
 
-		startNonce := d.lastBlock[work.Nonce1Word]
+		//startNonce := d.lastBlock[work.Nonce1Word]
 
-		throughput := uint32(0x20000000)
+		//throughput := uint32(0x20000000)
 		//gridx := ((throughput - 1) / 640)
 
-		gridx := uint32(52428) // like ccminer
+		//gridx := uint32(52428) // like ccminer
 
-		targetHigh := ^uint32(0)
+		//targetHigh := ^uint32(0)
 
-		decredHashNonce(gridx, blockx, throughput, startNonce, nonceResultsD, targetHigh)
+		//decredHashNonce(gridx, blockx, throughput, startNonce, nonceResultsD, targetHigh)
 
 		cu.MemcpyDtoH(nonceResultsH, nonceResultsD, d.cuInSize)
 
