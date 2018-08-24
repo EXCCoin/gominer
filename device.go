@@ -75,7 +75,7 @@ func (d *Device) updateCurrentWork() {
 	blockHeader := wire.BlockHeader{}
 	blockHeader.FromBytes(d.work.Data[:])
 	equihashInput, err := blockHeader.SerializeAllHeaderBytes()
-	d.equihashInput = equihashInput
+	d.work.EquihashInput = equihashInput
 	if err != nil {
 		d.hasWork = false
 	} else {

@@ -29,9 +29,10 @@ func NewWork(data [320]byte, target *big.Int, jobTime uint32, timeReceived uint3
 // Work holds the data returned from getwork and if needed some stratum related
 // values.
 type Work struct {
-	Data         [320]byte
-	Target       *big.Int
-	JobTime      uint32
-	TimeReceived uint32
-	IsGetWork    bool
+	Data          [320]byte
+	EquihashInput []byte
+	Target        *big.Int
+	JobTime       uint32
+	TimeReceived  uint32
+	IsGetWork     bool
 }

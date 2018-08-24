@@ -79,7 +79,6 @@ type Device struct {
 	lastBlock [16]uint32
 
 	work          work.Work
-	equihashInput []byte
 	newWork       chan *work.Work
 	workDone      chan []byte
 	hasWork       bool
