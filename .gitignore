@@ -31,3 +31,5 @@ gominer
 
 vendor/
 
+
+\.idea/
