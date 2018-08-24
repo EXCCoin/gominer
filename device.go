@@ -8,13 +8,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/decred/dcrd/blockchain"
-	"github.com/decred/dcrd/chaincfg"
-	"github.com/decred/dcrd/chaincfg/chainhash"
+	"github.com/EXCCoin/exccd/blockchain"
+	"github.com/EXCCoin/exccd/wire"
+	"github.com/EXCCoin/exccd/chaincfg"
+	"github.com/EXCCoin/exccd/chaincfg/chainhash"
 
-	"github.com/decred/gominer/blake256"
-	"github.com/decred/gominer/util"
-	"github.com/decred/gominer/work"
+	"github.com/EXCCoin/gominer/util"
+	"github.com/EXCCoin/gominer/work"
 )
 
 var chainParams = &chaincfg.MainNetParams

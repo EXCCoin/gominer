@@ -18,7 +18,7 @@ Benchmark mode:
 gominer -B
 ```
 
-Solo mining on mainnet using dcrd running on the local host:
+Solo mining on mainnet using exccd running on the local host:
 
 ```
 gominer -u myusername -P hunter2
