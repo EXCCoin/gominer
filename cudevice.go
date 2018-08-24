@@ -91,7 +91,7 @@ type Device struct {
 	quit chan struct{}
 }
 
-func decredCPUSetBlock52(input *[192]byte) {
+func decredCPUSetBlock52(input *[320]byte) {
 	if input == nil {
 		panic("input is nil")
 	}
@@ -303,7 +303,7 @@ func (d *Device) runDevice() error {
 	}
 	nonceResultsHSlice := *(*[]uint32)(unsafe.Pointer(&nonceResultsHSliceHeader))
 
-	endianData := new([192]byte)
+	endianData := new([320]byte)
 
 	for {
 		d.updateCurrentWork()

@@ -932,7 +932,7 @@ func (s *Stratum) PrepWork() error {
 		return err
 	}
 
-	var workData [192]byte
+	var workData [320]byte
 	copy(workData[:], workdata[:])
 	givenTs := binary.LittleEndian.Uint32(
 		workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])

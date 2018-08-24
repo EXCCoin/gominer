@@ -269,7 +269,7 @@ func (d *Device) foundCandidate(ts, nonce0, nonce1 uint32) {
 	d.Lock()
 	defer d.Unlock()
 	// Construct the final block header.
-	data := make([]byte, 192)
+	data := make([]byte, 320)
 	copy(data, d.work.Data[:])
 
 	binary.BigEndian.PutUint32(data[128+4*work.TimestampWord:], ts)

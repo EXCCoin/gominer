@@ -14,7 +14,7 @@ import (
 	"github.com/barnex/cuda5/cu"
 )
 
-func cudaPrecomputeTable(input *[192]byte) {
+func cudaPrecomputeTable(input *[320]byte) {
 	if input == nil {
 		panic("input is nil")
 	}

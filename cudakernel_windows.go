@@ -17,7 +17,7 @@ var (
 	kernelProcAddr          = kernelDll.MustFindProc("decred_hash_nonce").Addr()
 )
 
-func cudaPrecomputeTable(input *[192]byte) {
+func cudaPrecomputeTable(input *[320]byte) {
 	syscall.Syscall(precomputeTableProcAddr, 1, uintptr(unsafe.Pointer(input)), 0, 0)
 }
 
