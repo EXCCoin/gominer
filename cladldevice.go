@@ -121,10 +121,11 @@ type Device struct {
 	midstate  [8]uint32
 	lastBlock [16]uint32
 
-	work     work.Work
-	newWork  chan *work.Work
-	workDone chan []byte
-	hasWork  bool
+	work          work.Work
+	equihashInput []byte
+	newWork       chan *work.Work
+	workDone      chan []byte
+	hasWork       bool
 
 	started          uint32
 	allDiffOneShares uint64

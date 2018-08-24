@@ -65,31 +65,22 @@ func (d *Device) updateCurrentWork() {
 		}
 	}
 
-	d.hasWork = true
-
 	d.work = *w
 	minrLog.Tracef("pre-nonce: %v", hex.EncodeToString(d.work.Data[:]))
 
 	// Bump and set the work ID if the work is new.
 	d.currentWorkID++
-	binary.LittleEndian.PutUint32(d.work.Data[128+4*work.Nonce2Word:],
-		d.currentWorkID)
 
-	// Reset the hash state
-	copy(d.midstate[:], blake256.IV256[:])
-
-	// Hash the two first blocks
-	blake256.Block(d.midstate[:], d.work.Data[0:64], 512)
-	blake256.Block(d.midstate[:], d.work.Data[64:128], 1024)
-	minrLog.Tracef("midstate input data for work update %v",
-		hex.EncodeToString(d.work.Data[0:128]))
-
-	// Convert the next block to uint32 array.
-	for i := 0; i < 16; i++ {
-		d.lastBlock[i] = binary.BigEndian.Uint32(d.work.Data[128+i*4 : 132+i*4])
+	// update equihashInput
+	blockHeader := wire.BlockHeader{}
+	blockHeader.FromBytes(d.work.Data[:])
+	equihashInput, err := blockHeader.SerializeAllHeaderBytes()
+	d.equihashInput = equihashInput
+	if err != nil {
+		d.hasWork = false
+	} else {
+		d.hasWork = true
 	}
-	minrLog.Tracef("work data for work update: %v",
-		hex.EncodeToString(d.work.Data[:]))
 }
 
 func (d *Device) Run() {
