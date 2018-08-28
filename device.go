@@ -3,21 +3,17 @@
 package main
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"sync/atomic"
 	"time"
 
 	"github.com/EXCCoin/exccd/blockchain"
 	"github.com/EXCCoin/exccd/wire"
-	"github.com/EXCCoin/exccd/chaincfg"
-	"github.com/EXCCoin/exccd/chaincfg/chainhash"
 
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
 )
 
-var chainParams = &chaincfg.MainNetParams
 var deviceLibraryInitialized = false
 
 // Constants for fan and temperature bits
@@ -71,16 +67,12 @@ func (d *Device) updateCurrentWork() {
 	// Bump and set the work ID if the work is new.
 	d.currentWorkID++
 
-	// update equihashInput
+	// update blockHeader
 	blockHeader := wire.BlockHeader{}
 	blockHeader.FromBytes(d.work.Data[:])
-	equihashInput, err := blockHeader.SerializeAllHeaderBytes()
-	d.work.EquihashInput = equihashInput
-	if err != nil {
-		d.hasWork = false
-	} else {
-		d.hasWork = true
-	}
+	d.work.BlockHeader = blockHeader
+
+	d.hasWork = true
 }
 
 func (d *Device) Run() {
@@ -256,24 +248,20 @@ func (d *Device) fanControlSupported(kind string) bool {
 	return false
 }
 
-func (d *Device) foundCandidate(ts, nonce0, nonce1 uint32) {
+func (d *Device) foundCandidate(ts uint32, solution []byte) {
 	d.Lock()
 	defer d.Unlock()
-	// Construct the final block header.
-	data := make([]byte, 320)
-	copy(data, d.work.Data[:])
 
-	binary.BigEndian.PutUint32(data[128+4*work.TimestampWord:], ts)
-	binary.BigEndian.PutUint32(data[128+4*work.Nonce0Word:], nonce0)
-	binary.BigEndian.PutUint32(data[128+4*work.Nonce1Word:], nonce1)
-	hash := chainhash.HashH(data[0:180])
+	// Construct the final block header.
+	copy(d.work.BlockHeader.EquihashSolution[:], solution)
 
 	// Hashes that reach this logic and fail the minimal proof of
 	// work check are considered to be hardware errors.
-	hashNum := blockchain.HashToBig(&hash)
-	if hashNum.Cmp(chainParams.PowLimit) > 0 {
-		minrLog.Errorf("DEV #%d Hardware error found, hash %v above "+
-			"minimum target %064x", d.index, hash, d.work.Target.Bytes())
+	hashNum := d.work.BlockHeader.BlockHash()
+
+	if blockchain.HashToBig(&hashNum).Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
+		minrLog.Debugf("DEV #%d Found hash %s above minimum target %s",
+			d.index, blockchain.HashToBig(&hashNum).String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
 		d.invalidShares++
 		return
 	}
@@ -282,14 +270,13 @@ func (d *Device) foundCandidate(ts, nonce0, nonce1 uint32) {
 
 	if !cfg.Benchmark {
 		// Assess versus the pool or daemon target.
-		if hashNum.Cmp(d.work.Target) > 0 {
+		if blockchain.HashToBig(&hashNum).Cmp(d.work.Target) > 0 {
 			minrLog.Debugf("DEV #%d Hash %v bigger than target %032x (boo)",
-				d.index, hash, d.work.Target.Bytes())
+				d.index, hashNum, d.work.Target.Bytes())
 		} else {
-			minrLog.Infof("DEV #%d Found hash with work below target! %v (yay)",
-				d.index, hash)
+			minrLog.Infof("DEV #%d Found hash with work below target! %v (yay)", d.index, hashNum)
 			d.validShares++
-			d.workDone <- data
+			//d.workDone <- data // TODO
 		}
 	}
 }

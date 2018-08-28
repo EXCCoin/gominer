@@ -11,19 +11,20 @@ import "C"
 
 import (
 	"fmt"
-	"reflect"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
+	"encoding/binary"
 
 	"github.com/barnex/cuda5/cu"
 	cptr "github.com/mattn/go-pointer"
 	"github.com/EXCCoin/gominer/nvml"
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
-)
+	"github.com/EXCCoin/exccd/wire"
+	)
 
 const (
 	// From ccminer
@@ -44,9 +45,13 @@ func equihashSolutionSize(n, k int) int {
 }
 
 func (d *Device) handleEquihashSolution(solution []byte) {
-	a := 42
-	_ = a
-	// TODO
+	minrLog.Debugf("GPU #%d: Found candidate: %08x, workID %08x, timestamp %08x",
+		d.index, solution, util.Uint32EndiannessSwap(d.currentWorkID), d.lastBlock[work.TimestampWord])
+
+	// Assess the work. If it's below target, it'll be rejected
+	// here. The mining algorithm currently sends this function any
+	// difficulty 1 shares.
+	d.foundCandidate(d.lastBlock[work.TimestampWord], solution)
 }
 
 // Return the GPU library in use.
@@ -120,14 +125,14 @@ func deviceStats(index int) (uint32, uint32) {
 
 	nvmlFanSpeed, err := nvml.DeviceFanSpeed(dh)
 	if err != nil {
-		minrLog.Infof("NVML DeviceFanSpeed error: %v", err)
+		minrLog.Debugf("NVML DeviceFanSpeed error: %v", err)
 	} else {
 		fanPercent = uint32(nvmlFanSpeed)
 	}
 
 	nvmlTemp, err := nvml.DeviceTemperature(dh)
 	if err != nil {
-		minrLog.Infof("NVML DeviceTemperature error: %v", err)
+		minrLog.Debugf("NVML DeviceTemperature error: %v", err)
 	} else {
 		temperature = uint32(nvmlTemp)
 	}
@@ -282,7 +287,13 @@ func (d *Device) runDevice() error {
 	// when you begin mining. This ensures each GPU is doing
 	// different work. If the extraNonce has already been
 	// set for valid work, restore that.
-	d.extraNonce += uint32(d.index) << 24
+	enOffset, err := wire.RandomUint64()
+	if err != nil {
+		minrLog.Errorf("Unexpected error while generating random extra nonce offset: %v", err)
+		enOffset = 0
+	}
+
+	d.extraNonce += uint32((uint64(d.index) << 24) + enOffset)
 	d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
 
 	// Need to have this stuff here for a device vs thread issue.
@@ -296,19 +307,6 @@ func (d *Device) runDevice() error {
 	// at compile time.
 
 	minrLog.Infof("Started GPU #%d: %s", d.index, d.deviceName)
-	nonceResultsH := cu.MallocHost(d.cuInSize * 4)
-	nonceResultsD := cu.Malloc(d.cuInSize * 4)
-	defer cu.MemFreeHost(nonceResultsH)
-	defer nonceResultsD.Free()
-
-	nonceResultsHSliceHeader := reflect.SliceHeader{
-		Data: uintptr(nonceResultsH),
-		Len:  int(d.cuInSize),
-		Cap:  int(d.cuInSize),
-	}
-	nonceResultsHSlice := *(*[]uint32)(unsafe.Pointer(&nonceResultsHSliceHeader))
-
-	//endianData := new([320]byte)
 
 	for {
 		d.updateCurrentWork()
@@ -322,20 +320,7 @@ func (d *Device) runDevice() error {
 		// Increment extraNonce.
 		util.RolloverExtraNonce(&d.extraNonce)
 		d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
-
-		deviceptr := cptr.Save(d)
-		defer cptr.Unref(deviceptr)
-		C.EquihashSolveCuda(unsafe.Pointer(&d.work.EquihashInput[0]), C.uint64_t(len(d.work.EquihashInput)), C.uint32_t(d.extraNonce), deviceptr)
-
-		//copy(endianData[:], d.work.Data[:128])
-		//for i, j := 128, 0; i < 180; {
-		//	b := make([]byte, 4)
-		//	binary.BigEndian.PutUint32(b, d.lastBlock[j])
-		//	copy(endianData[i:], b)
-		//	i += 4
-		//	j++
-		//}
-		//decredCPUSetBlock52(endianData)
+		binary.LittleEndian.PutUint64(d.work.BlockHeader.ExtraData[:], uint64(d.extraNonce))
 
 		// Update the timestamp. Only solo work allows you to roll
 		// the timestamp.
@@ -346,47 +331,29 @@ func (d *Device) runDevice() error {
 		}
 		d.lastBlock[work.TimestampWord] = util.Uint32EndiannessSwap(ts)
 
-		nonceResultsHSlice[0] = 0
+		// Generate and set nonce
+		nonce, err := wire.RandomUint64()
+		if err != nil {
+			minrLog.Errorf("Unexpected error while generating random nonce: %v", err)
+			nonce = 0
+		}
 
-		cu.MemcpyHtoD(nonceResultsD, nonceResultsH, d.cuInSize*4)
+		d.work.BlockHeader.Nonce = uint32(nonce)
 
 		// Execute the kernel and follow its execution time.
 		currentTime := time.Now()
 
-		//startNonce := d.lastBlock[work.Nonce1Word]
-
-		//throughput := uint32(0x20000000)
-		//gridx := ((throughput - 1) / 640)
-
-		//gridx := uint32(52428) // like ccminer
-
-		//targetHigh := ^uint32(0)
-
-		//decredHashNonce(gridx, blockx, throughput, startNonce, nonceResultsD, targetHigh)
-
-		cu.MemcpyDtoH(nonceResultsH, nonceResultsD, d.cuInSize)
-
-		numResults := nonceResultsHSlice[0]
-		for i, result := range nonceResultsHSlice[1 : 1+numResults] {
-			// lol seelog
-			i := i
-			result := result
-			minrLog.Debugf("GPU #%d: Found candidate %v nonce %08x, "+
-				"extraNonce %08x, workID %08x, timestamp %08x",
-				d.index, i, result, d.lastBlock[work.Nonce1Word],
-				util.Uint32EndiannessSwap(d.currentWorkID),
-				d.lastBlock[work.TimestampWord])
-
-			// Assess the work. If it's below target, it'll be rejected
-			// here. The mining algorithm currently sends this function any
-			// difficulty 1 shares.
-			d.foundCandidate(d.lastBlock[work.TimestampWord], result,
-				d.lastBlock[work.Nonce1Word])
+		equihashInput, err := d.work.BlockHeader.SerializeAllHeaderBytes()
+		if err != nil {
+			continue
 		}
 
+		deviceptr := cptr.Save(d)
+		defer cptr.Unref(deviceptr)
+		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
+
 		elapsedTime := time.Since(currentTime)
-		minrLog.Tracef("GPU #%d: Kernel execution to read time: %v", d.index,
-			elapsedTime)
+		minrLog.Tracef("GPU #%d: Kernel execution to read time: %v", d.index, elapsedTime)
 	}
 }
 

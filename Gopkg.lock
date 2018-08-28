@@ -126,6 +126,7 @@
     "github.com/btcsuite/go-socks/socks",
     "github.com/davecgh/go-spew/spew",
     "github.com/jrick/logrotate/rotator",
+    "github.com/mattn/go-pointer",
   ]
   solver-name = "gps-cdcl"
   solver-version = 1

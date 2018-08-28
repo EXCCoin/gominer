@@ -951,7 +951,7 @@ func (s *Stratum) PrepWork() error {
 		return nil
 	}
 
-	w := work.NewWork(workData, s.Target, givenTs, uint32(time.Now().Unix()), false)
+	w := work.NewWork(workData, bh, s.Target, givenTs, uint32(time.Now().Unix()), false)
 
 	log.Tracef("Stratum prepated work data %v, target %032x",
 		hex.EncodeToString(w.Data[:]), w.Target.Bytes())

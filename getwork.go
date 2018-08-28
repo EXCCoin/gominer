@@ -22,6 +22,7 @@ import (
 	"github.com/EXCCoin/gominer/stratum"
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
+	"github.com/EXCCoin/exccd/wire"
 )
 
 // newHTTPClient returns a new HTTP client that is configured according to the
@@ -193,7 +194,10 @@ func GetWork() (*work.Work, error) {
 	copy(workData[:], data)
 	givenTs := binary.LittleEndian.Uint32(
 		workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
-	w := work.NewWork(workData, bigTarget, givenTs, uint32(time.Now().Unix()), true)
+
+	blockHeader := wire.BlockHeader{}
+	blockHeader.FromBytes(workData[:])
+	w := work.NewWork(workData, blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true)
 
 	w.Target = bigTarget
 
