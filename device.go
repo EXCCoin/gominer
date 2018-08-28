@@ -12,6 +12,8 @@ import (
 
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
+	"bytes"
+	"fmt"
 )
 
 var deviceLibraryInitialized = false
@@ -276,7 +278,16 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 		} else {
 			minrLog.Infof("DEV #%d Found hash with work below target! %v (yay)", d.index, hashNum)
 			d.validShares++
-			//d.workDone <- data // TODO
+			data := make([]byte, 0, 320)
+			buf := bytes.NewBuffer(data)
+			err := d.work.BlockHeader.Serialize(buf)
+			if err != nil {
+				errStr := fmt.Sprintf("Failed to serialize data: %v", err)
+				minrLog.Errorf("Error submitting work: %v", errStr)
+			} else {
+				data = data[:320]
+				d.workDone <- data
+			}
 		}
 	}
 }
