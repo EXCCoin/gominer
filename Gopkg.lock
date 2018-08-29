@@ -39,17 +39,6 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:7c95e6ada3cb4c4034a75f88a137400dfe7cbd5823c66b2ec4b014018b537ff7"
-  name = "github.com/agl/ed25519"
-  packages = [
-    ".",
-    "edwards25519",
-  ]
-  pruneopts = ""
-  revision = "5312a61534124124185d41f09206b9fef1d88403"
-
-[[projects]]
-  branch = "master"
   digest = "1:54bea804bed7ff425796be010fc1dcc8a2a8ff9e02f670607d63a9eca1b1e608"
   name = "github.com/barnex/cuda5"
   packages = ["cu"]

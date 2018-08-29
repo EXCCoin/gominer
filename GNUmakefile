@@ -31,8 +31,7 @@ endif
 
 
 ifeq ($(ARCH),Msys)
-obj/eqcuda1445.so: # TODO
-	$(NVCC) # TODO
+	# TODO
 else
 obj/blake.o: obj eqcuda1445/blake/blake2b.cpp
 	$(CXX) -c eqcuda1445/blake/blake2b.cpp -o obj/blake.o
@@ -49,14 +48,14 @@ endif
 
 
 ifeq ($(ARCH),Msys)
-build: # TODO
+	# TODO
 else
 build: obj/libeqcuda1445.so
 endif
 	go build
 
 ifeq ($(ARCH),Msys)
-install: # TODO
+	# TODO
 else
 install: obj/libeqcuda1445.so
 endif

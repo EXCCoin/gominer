@@ -2,6 +2,13 @@
 
 package main
 
+/*
+#include "eqcuda1445/eqcuda1445.h"
+#cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -std=c++17 -Wall -Wno-strict-aliasing -Wno-shift-count-overflow -Werror
+#cgo !windows LDFLAGS: -L/opt/cuda/lib64 -L/opt/cuda/lib -L/usr/local/cuda/lib64 -Lobj -leqcuda1445 -lcuda -lcudart -lstdc++ -ldl
+#cgo windows LDFLAGS: -Lobj -ldecred -Lnvidia/CUDA/v7.0/lib/x64 -lcuda -lcudart -Lnvidia/NVSMI -lnvml
+*/
+import "C"
 import (
 	"encoding/hex"
 	"sync/atomic"
@@ -24,52 +31,24 @@ import (
 	"github.com/barnex/cuda5/cu"
 )
 
-/*
-#include "eqcuda1445/eqcuda1445.h"
-#cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -std=c++17 -Wall -Wno-strict-aliasing -Wno-shift-count-overflow -Werror
-#cgo !windows LDFLAGS: -L/opt/cuda/lib64 -L/opt/cuda/lib -L/usr/local/cuda/lib64 -Lobj/ -leqcuda1445 -lcuda -lcudart -lstdc++ -ldl
-#cgo windows LDFLAGS: -Lobj -ldecred -Lnvidia/CUDA/v7.0/lib/x64 -lcuda -lcudart -Lnvidia/NVSMI -lnvml
-*/
-import "C"
-
-//export equihashProxy
-func equihashProxy(user_data unsafe.Pointer, solution unsafe.Pointer) C.int {
+//export equihashProxyGominer
+func equihashProxyGominer(user_data unsafe.Pointer, solution unsafe.Pointer) C.int {
 	device := cptr.Restore(user_data).(*Device)
 	csol := C.GoBytes(solution, C.int(equihashSolutionSize(144, 5)))
 	device.handleEquihashSolution(csol)
 	return 0
 }
 
-func equihashSolutionSize(n, k int) int {
-	return 1 << uint32(k) * (n/(k+1) + 1) / 8
-}
-
-func (d *Device) handleEquihashSolution(solution []byte) {
-	minrLog.Debugf("GPU #%d: Found candidate: %08x, workID %08x, timestamp %08x",
-		d.index, solution, util.Uint32EndiannessSwap(d.currentWorkID), d.lastBlock[work.TimestampWord])
-
-	// Assess the work. If it's below target, it'll be rejected
-	// here. The mining algorithm currently sends this function any
-	// difficulty 1 shares.
-	d.foundCandidate(d.lastBlock[work.TimestampWord], solution)
-}
-
 var deviceLibraryInitialized = false
 
 // Constants for fan and temperature bits
 const (
-	ADLFanFailSafe            = uint32(80)
-	AMDGPUFanFailSafe         = uint32(204)
-	AMDGPUFanMax              = uint32(255)
-	AMDTempDivisor            = uint32(1000)
 	ChangeLevelNone           = "None"
 	ChangeLevelSmall          = "Small"
 	ChangeLevelLarge          = "Large"
 	DeviceKindAMDGPU          = "AMDGPU"
 	DeviceKindADL             = "ADL"
 	DeviceKindNVML            = "NVML"
-	DeviceKindUnknown         = "Unknown"
-	DeviceTypeCPU             = "CPU"
 	DeviceTypeGPU             = "GPU"
 	FanControlHysteresis      = uint32(3)
 	FanControlAdjustmentLarge = uint32(10)
@@ -79,12 +58,6 @@ const (
 	TargetLower               = "Lower"
 	TargetHigher              = "Raise"
 	TargetNone                = "None"
-	localWorksize             = 64
-	cuOutputBufferSize        = 64
-
-	// From ccminer
-	threadsPerBlock = 640
-	blockx          = threadsPerBlock
 )
 
 type Device struct {
@@ -136,6 +109,88 @@ type Device struct {
 	quit chan struct{}
 }
 
+func (d *Device) Run() {
+	err := d.runDevice()
+	if err != nil {
+		minrLog.Errorf("Error on device: %v", err)
+	}
+}
+
+func (d *Device) Stop() {
+	close(d.quit)
+}
+
+func (d *Device) SetWork(w *work.Work) {
+	d.newWork <- w
+}
+
+func (d *Device) PrintStats() {
+	secondsElapsed := uint32(time.Now().Unix()) - d.started
+	if secondsElapsed == 0 {
+		return
+	}
+
+	d.Lock()
+	defer d.Unlock()
+
+	averageHashRate, fanPercent, temperature := d.Status()
+	log := fmt.Sprintf("DEV #%d (%s) %v", d.index, d.deviceName, util.FormatHashRate(averageHashRate))
+
+	if fanPercent != 0 {
+		log = fmt.Sprintf("%s Fan=%v%%", log, fanPercent)
+	}
+
+	if temperature != 0 {
+		log = fmt.Sprintf("%s T=%vC", log, temperature)
+	}
+
+	minrLog.Info(log)
+}
+
+// UpdateFanTemp updates a device's statistics
+func (d *Device) UpdateFanTemp() {
+	d.Lock()
+	defer d.Unlock()
+	if d.fanTempActive {
+		// For now amd and nvidia do more or less the same thing
+		// but could be split up later.  Anything else (Intel) just
+		// doesn't do anything.
+		switch d.kind {
+		case DeviceKindADL, DeviceKindAMDGPU, DeviceKindNVML:
+			fanPercent, temperature := deviceStats(d.index)
+			atomic.StoreUint32(&d.fanPercent, fanPercent)
+			atomic.StoreUint32(&d.temperature, temperature)
+			break
+		}
+	}
+}
+
+func (d *Device) Status() (float64, uint32, uint32) {
+	secondsElapsed := uint32(time.Now().Unix()) - d.started
+
+	averageHashRate := float64(d.allDiffOneShares) / float64(secondsElapsed)
+
+	fanPercent := atomic.LoadUint32(&d.fanPercent)
+	temperature := atomic.LoadUint32(&d.temperature)
+
+	return averageHashRate, fanPercent, temperature
+}
+
+func (d *Device) Release() {
+	cu.SetDevice(d.cuDeviceID)
+	cu.DeviceReset()
+}
+
+func (d *Device) handleEquihashSolution(solution []byte) {
+	minrLog.Debugf("GPU #%d: Found candidate: %08x, workID %08x, timestamp %08x",
+		d.index, solution, util.Uint32EndiannessSwap(d.currentWorkID), d.lastBlock[work.TimestampWord])
+
+	// Assess the work. If it's below target, it'll be rejected
+	// here. The mining algorithm currently sends this function any
+	// difficulty 1 shares.
+	d.foundCandidate(d.lastBlock[work.TimestampWord], solution)
+}
+
 func (d *Device) updateCurrentWork() {
 	var w *work.Work
 	if d.hasWork {
@@ -168,13 +223,6 @@ func (d *Device) updateCurrentWork() {
 	d.work.BlockHeader = blockHeader
 
 	d.hasWork = true
-}
-
-func (d *Device) Run() {
-	err := d.runDevice()
-	if err != nil {
-		minrLog.Errorf("Error on device: %v", err)
-	}
 }
 
 // This is pretty hacky/proof-of-concepty
@@ -384,139 +432,79 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 	}
 }
 
-func (d *Device) Stop() {
-	close(d.quit)
-}
-
-func (d *Device) SetWork(w *work.Work) {
-	d.newWork <- w
-}
-
-func (d *Device) PrintStats() {
-	secondsElapsed := uint32(time.Now().Unix()) - d.started
-	if secondsElapsed == 0 {
-		return
+func (d *Device) runDevice() error {
+	// Bump the extraNonce for the device it's running on
+	// when you begin mining. This ensures each GPU is doing
+	// different work. If the extraNonce has already been
+	// set for valid work, restore that.
+	enOffset, err := wire.RandomUint64()
+	if err != nil {
+		minrLog.Errorf("Unexpected error while generating random extra nonce offset: %v", err)
+		enOffset = 0
 	}
 
-	d.Lock()
-	defer d.Unlock()
+	d.extraNonce += uint32((uint64(d.index) << 24) + enOffset)
+	d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
 
-	averageHashRate, fanPercent, temperature := d.Status()
-	log := fmt.Sprintf("DEV #%d (%s) %v", d.index, d.deviceName, util.FormatHashRate(averageHashRate))
+	// Need to have this stuff here for a device vs thread issue.
+	runtime.LockOSThread()
 
-	if fanPercent != 0 {
-		log = fmt.Sprintf("%s Fan=%v%%", log, fanPercent)
-	}
+	cu.DeviceReset()
+	cu.SetDevice(d.cuDeviceID)
+	cu.SetDeviceFlags(cu.DeviceScheduleBlockingSync)
 
-	if temperature != 0 {
-		log = fmt.Sprintf("%s T=%vC", log, temperature)
-	}
+	// kernel is built with nvcc, not an api call so must be done
+	// at compile time.
 
-	minrLog.Info(log)
-}
+	minrLog.Infof("Started GPU #%d: %s", d.index, d.deviceName)
 
-// UpdateFanTemp updates a device's statistics
-func (d *Device) UpdateFanTemp() {
-	d.Lock()
-	defer d.Unlock()
-	if d.fanTempActive {
-		// For now amd and nvidia do more or less the same thing
-		// but could be split up later.  Anything else (Intel) just
-		// doesn't do anything.
-		switch d.kind {
-		case DeviceKindADL, DeviceKindAMDGPU, DeviceKindNVML:
-			fanPercent, temperature := deviceStats(d.index)
-			atomic.StoreUint32(&d.fanPercent, fanPercent)
-			atomic.StoreUint32(&d.temperature, temperature)
-			break
+	for {
+		d.updateCurrentWork()
+
+		select {
+		case <-d.quit:
+			return nil
+		default:
 		}
+
+		// Increment extraNonce.
+		util.RolloverExtraNonce(&d.extraNonce)
+		d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
+		binary.LittleEndian.PutUint64(d.work.BlockHeader.ExtraData[:], uint64(d.extraNonce))
+
+		// Update the timestamp. Only solo work allows you to roll
+		// the timestamp.
+		ts := d.work.JobTime
+		if d.work.IsGetWork {
+			diffSeconds := uint32(time.Now().Unix()) - d.work.TimeReceived
+			ts = d.work.JobTime + diffSeconds
+		}
+		d.lastBlock[work.TimestampWord] = util.Uint32EndiannessSwap(ts)
+
+		// Generate and set nonce
+		nonce, err := wire.RandomUint64()
+		if err != nil {
+			minrLog.Errorf("Unexpected error while generating random nonce: %v", err)
+			nonce = 0
+		}
+
+		d.work.BlockHeader.Nonce = uint32(nonce)
+
+		// Execute the kernel and follow its execution time.
+		currentTime := time.Now()
+
+		equihashInput, err := d.work.BlockHeader.SerializeAllHeaderBytes()
+		if err != nil {
+			continue
+		}
+
+		deviceptr := cptr.Save(d)
+		defer cptr.Unref(deviceptr)
+		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
+
+		elapsedTime := time.Since(currentTime)
+		minrLog.Tracef("GPU #%d: Kernel execution to read time: %v", d.index, elapsedTime)
 	}
-}
-
-func (d *Device) Status() (float64, uint32, uint32) {
-	secondsElapsed := uint32(time.Now().Unix()) - d.started
-
-	averageHashRate := float64(d.allDiffOneShares) / float64(secondsElapsed)
-
-	fanPercent := atomic.LoadUint32(&d.fanPercent)
-	temperature := atomic.LoadUint32(&d.temperature)
-
-	return averageHashRate, fanPercent, temperature
-}
-
-func deviceStats(index int) (uint32, uint32) {
-	fanPercent := uint32(0)
-	temperature := uint32(0)
-
-	dh, err := nvml.DeviceGetHandleByIndex(index)
-	if err != nil {
-		minrLog.Errorf("NVML DeviceGetHandleByIndex error: %v", err)
-		return fanPercent, temperature
-	}
-
-	nvmlFanSpeed, err := nvml.DeviceFanSpeed(dh)
-	if err != nil {
-		minrLog.Debugf("NVML DeviceFanSpeed error: %v", err)
-	} else {
-		fanPercent = uint32(nvmlFanSpeed)
-	}
-
-	nvmlTemp, err := nvml.DeviceTemperature(dh)
-	if err != nil {
-		minrLog.Debugf("NVML DeviceTemperature error: %v", err)
-	} else {
-		temperature = uint32(nvmlTemp)
-	}
-
-	return fanPercent, temperature
-}
-
-// unsupported -- just here for compilation
-func fanControlSet(index int, fanCur uint32, tempTargetType string, fanChangeLevel string) {
-	minrLog.Errorf("NVML fanControl() reached but shouldn't have been")
-}
-
-func getInfo() ([]cu.Device, error) {
-	cu.Init(0)
-	ids := cu.DeviceGetCount()
-	minrLog.Infof("%v GPUs", ids)
-	var CUdevices []cu.Device
-	for i := 0; i < ids; i++ {
-		dev := cu.DeviceGet(i)
-		CUdevices = append(CUdevices, dev)
-		minrLog.Infof("%v: %v", i, dev.Name())
-	}
-	return CUdevices, nil
-}
-
-// getCUDevices returns the list of devices for the given platform.
-func getCUDevices() ([]cu.Device, error) {
-	cu.Init(0)
-
-	version := cu.Version()
-	fmt.Println(version)
-
-	maj := version / 1000
-	min := version % 100
-
-	minMajor := 5
-	minMinor := 5
-
-	if maj < minMajor || (maj == minMajor && min < minMinor) {
-		return nil, fmt.Errorf("Driver does not support CUDA %v.%v API", minMajor, minMinor)
-	}
-
-	var numDevices int
-	numDevices = cu.DeviceGetCount()
-	if numDevices < 1 {
-		return nil, fmt.Errorf("No devices found")
-	}
-	devices := make([]cu.Device, numDevices)
-	for i := 0; i < numDevices; i++ {
-		dev := cu.DeviceGet(i)
-		devices[i] = dev
-	}
-	return devices, nil
 }
 
 // ListDevices prints a list of CUDA capable GPUs present.
@@ -611,87 +599,83 @@ func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan []byte)
 	return d, nil
 }
 
-func (d *Device) runDevice() error {
-	// Bump the extraNonce for the device it's running on
-	// when you begin mining. This ensures each GPU is doing
-	// different work. If the extraNonce has already been
-	// set for valid work, restore that.
-	enOffset, err := wire.RandomUint64()
-	if err != nil {
-		minrLog.Errorf("Unexpected error while generating random extra nonce offset: %v", err)
-		enOffset = 0
-	}
-
-	d.extraNonce += uint32((uint64(d.index) << 24) + enOffset)
-	d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
-
-	// Need to have this stuff here for a device vs thread issue.
-	runtime.LockOSThread()
-
-	cu.DeviceReset()
-	cu.SetDevice(d.cuDeviceID)
-	cu.SetDeviceFlags(cu.DeviceScheduleBlockingSync)
-
-	// kernel is built with nvcc, not an api call so must be done
-	// at compile time.
-
-	minrLog.Infof("Started GPU #%d: %s", d.index, d.deviceName)
-
-	for {
-		d.updateCurrentWork()
-
-		select {
-		case <-d.quit:
-			return nil
-		default:
-		}
-
-		// Increment extraNonce.
-		util.RolloverExtraNonce(&d.extraNonce)
-		d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
-		binary.LittleEndian.PutUint64(d.work.BlockHeader.ExtraData[:], uint64(d.extraNonce))
-
-		// Update the timestamp. Only solo work allows you to roll
-		// the timestamp.
-		ts := d.work.JobTime
-		if d.work.IsGetWork {
-			diffSeconds := uint32(time.Now().Unix()) - d.work.TimeReceived
-			ts = d.work.JobTime + diffSeconds
-		}
-		d.lastBlock[work.TimestampWord] = util.Uint32EndiannessSwap(ts)
-
-		// Generate and set nonce
-		nonce, err := wire.RandomUint64()
-		if err != nil {
-			minrLog.Errorf("Unexpected error while generating random nonce: %v", err)
-			nonce = 0
-		}
-
-		d.work.BlockHeader.Nonce = uint32(nonce)
-
-		// Execute the kernel and follow its execution time.
-		currentTime := time.Now()
-
-		equihashInput, err := d.work.BlockHeader.SerializeAllHeaderBytes()
-		if err != nil {
-			continue
-		}
-
-		deviceptr := cptr.Save(d)
-		defer cptr.Unref(deviceptr)
-		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
-
-		elapsedTime := time.Since(currentTime)
-		minrLog.Tracef("GPU #%d: Kernel execution to read time: %v", d.index, elapsedTime)
-	}
+func equihashSolutionSize(n, k int) int {
+	return 1 << uint32(k) * (n/(k+1) + 1) / 8
 }
 
-func minUint32(a, b uint32) uint32 {
-	if a > b {
-		return a
-	} else {
-		return b
+func deviceStats(index int) (uint32, uint32) {
+	fanPercent := uint32(0)
+	temperature := uint32(0)
+
+	dh, err := nvml.DeviceGetHandleByIndex(index)
+	if err != nil {
+		minrLog.Errorf("NVML DeviceGetHandleByIndex error: %v", err)
+		return fanPercent, temperature
 	}
+
+	nvmlFanSpeed, err := nvml.DeviceFanSpeed(dh)
+	if err != nil {
+		minrLog.Debugf("NVML DeviceFanSpeed error: %v", err)
+	} else {
+		fanPercent = uint32(nvmlFanSpeed)
+	}
+
+	nvmlTemp, err := nvml.DeviceTemperature(dh)
+	if err != nil {
+		minrLog.Debugf("NVML DeviceTemperature error: %v", err)
+	} else {
+		temperature = uint32(nvmlTemp)
+	}
+
+	return fanPercent, temperature
+}
+
+// unsupported -- just here for compilation
+func fanControlSet(index int, fanCur uint32, tempTargetType string, fanChangeLevel string) {
+	minrLog.Errorf("NVML fanControl() reached but shouldn't have been")
+}
+
+func getInfo() ([]cu.Device, error) {
+	cu.Init(0)
+	ids := cu.DeviceGetCount()
+	minrLog.Infof("%v GPUs", ids)
+	var CUdevices []cu.Device
+	for i := 0; i < ids; i++ {
+		dev := cu.DeviceGet(i)
+		CUdevices = append(CUdevices, dev)
+		minrLog.Infof("%v: %v", i, dev.Name())
+	}
+	return CUdevices, nil
+}
+
+// getCUDevices returns the list of devices for the given platform.
+func getCUDevices() ([]cu.Device, error) {
+	cu.Init(0)
+
+	version := cu.Version()
+	fmt.Println(version)
+
+	maj := version / 1000
+	min := version % 100
+
+	minMajor := 5
+	minMinor := 5
+
+	if maj < minMajor || (maj == minMajor && min < minMinor) {
+		return nil, fmt.Errorf("Driver does not support CUDA %v.%v API", minMajor, minMinor)
+	}
+
+	var numDevices int
+	numDevices = cu.DeviceGetCount()
+	if numDevices < 1 {
+		return nil, fmt.Errorf("No devices found")
+	}
+	devices := make([]cu.Device, numDevices)
+	for i := 0; i < numDevices; i++ {
+		dev := cu.DeviceGet(i)
+		devices[i] = dev
+	}
+	return devices, nil
 }
 
 func newMinerDevs(m *Miner) (*Miner, int, error) {
@@ -732,11 +716,6 @@ func newMinerDevs(m *Miner) (*Miner, int, error) {
 	}
 
 	return m, deviceListEnabledCount, nil
-}
-
-func (d *Device) Release() {
-	cu.SetDevice(d.cuDeviceID)
-	cu.DeviceReset()
 }
 
 // Return the GPU library in use.
