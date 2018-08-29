@@ -117,24 +117,24 @@ func (m *Miner) workRefreshThread() {
 	for {
 		// Only use that is we are not using a pool.
 		if m.pool == nil {
-			work, err := GetWork()
+			w, err := GetWork()
 			if err != nil {
 				minrLog.Errorf("Error in getwork: %v", err)
 			} else {
 				for _, d := range m.devices {
-					d.SetWork(work)
+					d.SetWork(w)
 				}
 			}
 		} else {
 			m.pool.Lock()
 			if m.pool.PoolWork.NewWork {
-				work, err := GetPoolWork(m.pool)
+				w, err := GetPoolWork(m.pool)
 				m.pool.Unlock()
 				if err != nil {
 					minrLog.Errorf("Error in getpoolwork: %v", err)
 				} else {
 					for _, d := range m.devices {
-						d.SetWork(work)
+						d.SetWork(w)
 					}
 				}
 			} else {
@@ -153,7 +153,7 @@ func (m *Miner) workRefreshThread() {
 func (m *Miner) printStatsThread() {
 	defer m.wg.Done()
 
-	t := time.NewTicker(time.Second * 5)
+	t := time.NewTicker(time.Second * 30)
 	defer t.Stop()
 
 	for {
@@ -214,9 +214,9 @@ func (m *Miner) Run() {
 
 	if cfg.Benchmark {
 		minrLog.Warn("Running in BENCHMARK mode! No real mining taking place!")
-		work := &work.Work{}
+		w := &work.Work{}
 		for _, d := range m.devices {
-			d.SetWork(work)
+			d.SetWork(w)
 		}
 	} else {
 		m.wg.Add(1)

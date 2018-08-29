@@ -257,13 +257,12 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 	// Construct the final block header.
 	copy(d.work.BlockHeader.EquihashSolution[:], solution)
 
-	// Hashes that reach this logic and fail the minimal proof of
-	// work check are considered to be hardware errors.
 	hashNum := d.work.BlockHeader.BlockHash()
+	hashNumBig := blockchain.HashToBig(&hashNum)
 
-	if blockchain.HashToBig(&hashNum).Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
+	if hashNumBig.Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
 		minrLog.Debugf("DEV #%d Found hash %s above minimum target %s",
-			d.index, blockchain.HashToBig(&hashNum).String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
+			d.index, hashNumBig.String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
 		d.invalidShares++
 		return
 	}
@@ -272,9 +271,9 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 
 	if !cfg.Benchmark {
 		// Assess versus the pool or daemon target.
-		if blockchain.HashToBig(&hashNum).Cmp(d.work.Target) > 0 {
-			minrLog.Debugf("DEV #%d Hash %v bigger than target %032x (boo)",
-				d.index, hashNum, d.work.Target.Bytes())
+		if hashNumBig.Cmp(d.work.Target) > 0 {
+			minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)",
+				d.index, hashNumBig, d.work.Target.Bytes())
 		} else {
 			minrLog.Infof("DEV #%d Found hash with work below target! %v (yay)", d.index, hashNum)
 			d.validShares++
@@ -310,21 +309,17 @@ func (d *Device) PrintStats() {
 	defer d.Unlock()
 
 	averageHashRate, fanPercent, temperature := d.Status()
+	log := fmt.Sprintf("DEV #%d (%s) %v", d.index, d.deviceName, util.FormatHashRate(averageHashRate))
 
-	if fanPercent != 0 || temperature != 0 {
-		minrLog.Infof("DEV #%d (%s) %v Fan=%v%% T=%vC",
-			d.index,
-			d.deviceName,
-			util.FormatHashRate(averageHashRate),
-			fanPercent,
-			temperature)
-	} else {
-		minrLog.Infof("DEV #%d (%s) %v",
-			d.index,
-			d.deviceName,
-			util.FormatHashRate(averageHashRate),
-		)
+	if fanPercent != 0 {
+		log = fmt.Sprintf("%s Fan=%v%%", log, fanPercent)
 	}
+
+	if temperature != 0 {
+		log = fmt.Sprintf("%s T=%vC", log, temperature)
+	}
+
+	minrLog.Info(log)
 }
 
 // UpdateFanTemp updates a device's statistics
@@ -347,11 +342,8 @@ func (d *Device) UpdateFanTemp() {
 
 func (d *Device) Status() (float64, uint32, uint32) {
 	secondsElapsed := uint32(time.Now().Unix()) - d.started
-	diffOneShareHashesAvg := uint64(0x00000000FFFFFFFF)
 
-	averageHashRate := (float64(diffOneShareHashesAvg) *
-		float64(d.allDiffOneShares)) /
-		float64(secondsElapsed)
+	averageHashRate := float64(d.allDiffOneShares) / float64(secondsElapsed)
 
 	fanPercent := atomic.LoadUint32(&d.fanPercent)
 	temperature := atomic.LoadUint32(&d.temperature)
