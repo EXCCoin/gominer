@@ -1,6 +1,5 @@
-CC ?= gcc -fPIC
-CXX ?= g++ -fPIC
-NVCC ?= nvcc -Xcompiler -fPIC
+CXX= g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -fPIC
+NVCC ?= nvcc -arch sm_35 -O3 -Xptxas -O3 -Xcompiler -O3 --compiler-options '-fPIC'
 AR ?= ar
 # -o is gnu only so this needs to be smarter; it does work because on darwin it
 #  fails which is also not windows.
@@ -29,27 +28,39 @@ obj:
 endif
 	mkdir obj
 
-ifeq ($(ARCH),Msys)
-obj/decred.dll: obj sph/blake.c decred.cu
-	$(NVCC) --shared --optimize=3 --compiler-options=-GS-,-MD -I. -Isph decred.cu sph/blake.c -o obj/decred.dll
-else
-obj/decred.a: obj sph/blake.c decred.cu
-	$(NVCC) --lib --optimize=3 -I. decred.cu sph/blake.c -o obj/decred.a
-endif
+
 
 ifeq ($(ARCH),Msys)
-build: obj/decred.dll
+obj/eqcuda1445.so: # TODO
+	$(NVCC) # TODO
 else
-build: obj/decred.a
+obj/blake.o: obj eqcuda1445/blake/blake2b.cpp
+	$(CXX) -c eqcuda1445/blake/blake2b.cpp -o obj/blake.o
+
+obj/solver.o: obj eqcuda1445/solver.cu
+	$(NVCC) -rdc=true -c -o obj/solver.o eqcuda1445/solver.cu
+
+obj/eqcuda1445.o: obj obj/solver.o
+	$(NVCC) -dlink -o obj/eqcuda1445.o obj/solver.o
+
+obj/libeqcuda1445.so: obj obj/eqcuda1445.o obj/blake.o
+	$(CXX) -Wl,-soname,libeqcuda1445.so -shared -o obj/libeqcuda1445.so obj/eqcuda1445.o obj/solver.o obj/blake.o -L/opt/cuda/lib64 -L/usr/local/cuda/lib64 -lcudart_static  -ldl -lrt -lpthread
 endif
-	go build -tags 'cuda'
+
 
 ifeq ($(ARCH),Msys)
-install: obj/decred.dll
+build: # TODO
 else
-install: obj/decred.a
+build: obj/libeqcuda1445.so
 endif
-	go install -tags 'cuda'
+	go build
+
+ifeq ($(ARCH),Msys)
+install: # TODO
+else
+install: obj/libeqcuda1445.so
+endif
+	go install
 
 clean:
 	rm -rf obj
