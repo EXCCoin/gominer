@@ -22,6 +22,7 @@ import (
 
 	"github.com/EXCCoin/exccd/blockchain"
 	"github.com/EXCCoin/exccd/wire"
+	"github.com/EXCCoin/exccd/chaincfg"
 
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
@@ -34,7 +35,7 @@ import (
 //export equihashProxyGominer
 func equihashProxyGominer(userData unsafe.Pointer, solution unsafe.Pointer) C.int {
 	device := cptr.Restore(userData).(*Device)
-	csol := C.GoBytes(solution, C.int(equihashSolutionSize(144, 5)))
+	csol := C.GoBytes(solution, C.int(equihashSolutionSize(chaincfg.MainNetParams.N, chaincfg.MainNetParams.K)))
 	device.handleEquihashSolution(csol)
 	return 0
 }
