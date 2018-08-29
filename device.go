@@ -6,7 +6,7 @@ package main
 #include "eqcuda1445/eqcuda1445.h"
 #cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -std=c++17 -Wall -Wno-strict-aliasing -Wno-shift-count-overflow -Werror
 #cgo !windows LDFLAGS: -L/opt/cuda/lib64 -L/opt/cuda/lib -L/usr/local/cuda/lib64 -Lobj -leqcuda1445 -lcuda -lcudart -lstdc++ -ldl
-#cgo windows LDFLAGS: -Lobj -ldecred -Lnvidia/CUDA/v7.0/lib/x64 -lcuda -lcudart -Lnvidia/NVSMI -lnvml
+#cgo windows LDFLAGS: -Lobj -leqcuda1445 -Lnvidia/CUDA/v7.0/lib/x64 -lcuda -lcudart -Lnvidia/NVSMI -lnvml
 */
 import "C"
 import (
@@ -32,8 +32,8 @@ import (
 )
 
 //export equihashProxyGominer
-func equihashProxyGominer(user_data unsafe.Pointer, solution unsafe.Pointer) C.int {
-	device := cptr.Restore(user_data).(*Device)
+func equihashProxyGominer(userData unsafe.Pointer, solution unsafe.Pointer) C.int {
+	device := cptr.Restore(userData).(*Device)
 	csol := C.GoBytes(solution, C.int(equihashSolutionSize(144, 5)))
 	device.handleEquihashSolution(csol)
 	return 0
@@ -216,12 +216,6 @@ func (d *Device) updateCurrentWork() {
 
 	// Bump and set the work ID if the work is new.
 	d.currentWorkID++
-
-	// update blockHeader
-	blockHeader := wire.BlockHeader{}
-	blockHeader.FromBytes(d.work.Data[:])
-	d.work.BlockHeader = blockHeader
-
 	d.hasWork = true
 }
 
@@ -437,13 +431,7 @@ func (d *Device) runDevice() error {
 	// when you begin mining. This ensures each GPU is doing
 	// different work. If the extraNonce has already been
 	// set for valid work, restore that.
-	enOffset, err := wire.RandomUint64()
-	if err != nil {
-		minrLog.Errorf("Unexpected error while generating random extra nonce offset: %v", err)
-		enOffset = 0
-	}
-
-	d.extraNonce += uint32((uint64(d.index) << 24) + enOffset)
+	d.extraNonce += uint32(d.index) << 24
 	d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
 
 	// Need to have this stuff here for a device vs thread issue.
@@ -455,6 +443,9 @@ func (d *Device) runDevice() error {
 
 	// kernel is built with nvcc, not an api call so must be done
 	// at compile time.
+
+	deviceptr := cptr.Save(d)
+	defer cptr.Unref(deviceptr)
 
 	minrLog.Infof("Started GPU #%d: %s", d.index, d.deviceName)
 
@@ -498,8 +489,6 @@ func (d *Device) runDevice() error {
 			continue
 		}
 
-		deviceptr := cptr.Save(d)
-		defer cptr.Unref(deviceptr)
 		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
 
 		elapsedTime := time.Since(currentTime)

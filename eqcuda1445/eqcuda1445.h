@@ -5,7 +5,7 @@
 extern "C" {
 #endif
 
-int equihashProxyGominer(void *blockData, void *solution);
+int equihashProxyGominer(void *userData, void *solution);
 
 int equihash_solve_c(const char *header, uint64_t header_len,
                      uint32_t nonce,

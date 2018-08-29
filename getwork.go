@@ -175,16 +175,14 @@ func GetWork() (*work.Work, error) {
 		return nil, err
 	}
 	if len(data) != 320 {
-		return nil, fmt.Errorf("Wrong data length: got %d, expected 320",
-			len(data))
+		return nil, fmt.Errorf("Wrong data length: got %d, expected 320", len(data))
 	}
 	target, err := hex.DecodeString(res.Result.Target)
 	if err != nil {
 		return nil, err
 	}
 	if len(target) != 32 {
-		return nil, fmt.Errorf("Wrong target length: got %d, expected 32",
-			len(target))
+		return nil, fmt.Errorf("Wrong target length: got %d, expected 32", len(target))
 	}
 
 	bigTarget := new(big.Int)
@@ -192,13 +190,11 @@ func GetWork() (*work.Work, error) {
 
 	var workData [320]byte
 	copy(workData[:], data)
-	givenTs := binary.LittleEndian.Uint32(
-		workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
+	givenTs := binary.LittleEndian.Uint32(workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 
 	blockHeader := wire.BlockHeader{}
 	blockHeader.FromBytes(workData[:])
 	w := work.NewWork(workData, blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true)
-
 	w.Target = bigTarget
 
 	return w, nil

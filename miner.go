@@ -76,8 +76,7 @@ func (m *Miner) workSubmitThread() {
 				} else {
 					if accepted {
 						atomic.AddUint64(&m.validShares, 1)
-						minrLog.Debugf("Submitted work successfully: %v",
-							accepted)
+						minrLog.Debugf("Submitted work successfully: %v", accepted)
 					} else {
 						atomic.AddUint64(&m.invalidShares, 1)
 					}
@@ -98,8 +97,7 @@ func (m *Miner) workSubmitThread() {
 					}
 				} else {
 					if submitted {
-						minrLog.Debugf("Submitted work to pool successfully: %v",
-							submitted)
+						minrLog.Debugf("Submitted work to pool successfully: %v", submitted)
 					}
 					m.needsWorkRefresh <- struct{}{}
 				}
