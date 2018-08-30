@@ -239,8 +239,7 @@ func GetWorkSubmit(data []byte) (bool, error) {
 	}
 	url := protocol + "://" + cfg.RPCServer
 	hexData := hex.EncodeToString(data)
-	jsonStr := []byte(`{"jsonrpc": "2.0", "method": "getwork", "params": ["` +
-		hexData + `"], "id": 1}`)
+	jsonStr := []byte(`{"jsonrpc": "2.0", "method": "getwork", "params": ["` + hexData + `"], "id": 1}`)
 	bodyBuff := bytes.NewBuffer(jsonStr)
 	httpRequest, err := http.NewRequest("POST", url, bodyBuff)
 	if err != nil {
@@ -271,8 +270,7 @@ func GetWorkSubmit(data []byte) (bool, error) {
 	}
 
 	if httpResponse.Status != "200 OK" {
-		return false, fmt.Errorf("error calling getwork (%s): %s",
-			httpResponse.Status, body)
+		return false, fmt.Errorf("error calling getwork (%s): %s", httpResponse.Status, body)
 	}
 
 	var res getWorkSubmitResponseJson
@@ -282,8 +280,7 @@ func GetWorkSubmit(data []byte) (bool, error) {
 	}
 
 	if res.Error != nil {
-		return false, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code,
-			res.Error.Message)
+		return false, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code, res.Error.Message)
 	}
 
 	return res.Result, nil

@@ -3,10 +3,10 @@
 package main
 
 /*
-#include "eqcuda1445/eqcuda1445.h"
 #cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -std=c++17 -Wall -Wno-strict-aliasing -Wno-shift-count-overflow -Werror
-#cgo !windows LDFLAGS: -L/opt/cuda/lib64 -L/opt/cuda/lib -L/usr/local/cuda/lib64 -Lobj -leqcuda1445 -lcuda -lcudart -lstdc++ -ldl
-#cgo windows LDFLAGS: -Lobj -leqcuda1445 -Lnvidia/CUDA/v7.0/lib/x64 -lcuda -lcudart -Lnvidia/NVSMI -lnvml
+#cgo !windows LDFLAGS: -Lobj -leqcuda1445
+#cgo windows LDFLAGS: -Lobj -leqcuda1445
+#include "eqcuda1445/eqcuda1445.h"
 */
 import "C"
 import (
@@ -485,7 +485,12 @@ func (d *Device) runDevice() error {
 		if err != nil {
 			continue
 		}
+		equihashInputLog := ""
+		for _, e := range equihashInput {
+			equihashInputLog = fmt.Sprintf("%s%d", equihashInputLog, int(e))
+		}
 
+		minrLog.Infof("EquihashSolveCuda(workId=%d, equihashInput=[%s], nonce=%d, extraNonce=%d)", d.currentWorkID, equihashInputLog, d.work.BlockHeader.Nonce, d.extraNonce)
 		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
 
 		elapsedTime := time.Since(currentTime)

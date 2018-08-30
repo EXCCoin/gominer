@@ -1,6 +1,6 @@
 CXX= g++ -O3 -march=x86-64 -mtune=generic -std=c++17 -fPIC
-NVCC ?= nvcc -arch sm_35 -O3 -Xptxas -O3 -Xcompiler -O3 --compiler-options '-fPIC'
-AR ?= ar
+NVCC= nvcc -arch sm_35 -O3 -Xptxas -O3 -Xcompiler -O3 --compiler-options '-fPIC'
+AR= ar
 # -o is gnu only so this needs to be smarter; it does work because on darwin it
 #  fails which is also not windows.
 ARCH:=$(shell uname -o)
@@ -42,7 +42,7 @@ obj/solver.o: obj eqcuda1445/solver.cu
 obj/eqcuda1445.o: obj obj/solver.o
 	$(NVCC) -dlink -o obj/eqcuda1445.o obj/solver.o
 
-obj/libeqcuda1445.so: obj obj/eqcuda1445.o obj/blake.o
+obj/libeqcuda1445.so: obj obj/blake.o obj/eqcuda1445.o
 	$(CXX) -Wl,-soname,libeqcuda1445.so -shared -o obj/libeqcuda1445.so obj/eqcuda1445.o obj/solver.o obj/blake.o -L/opt/cuda/lib64 -L/usr/local/cuda/lib64 -lcudart_static  -ldl -lrt -lpthread
 endif
 
