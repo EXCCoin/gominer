@@ -3,9 +3,9 @@
 package work
 
 import (
-	"math/big"
-	"github.com/EXCCoin/exccd/wire"
 	"github.com/EXCCoin/exccd/chaincfg/chainhash"
+	"github.com/EXCCoin/exccd/wire"
+	"math/big"
 )
 
 // These are the locations of various data inside Work.Data.

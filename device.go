@@ -10,25 +10,25 @@ package main
 */
 import "C"
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
-	"bytes"
-	"fmt"
-	"sync"
-	"runtime"
-	"encoding/binary"
 	"unsafe"
 
 	"github.com/EXCCoin/exccd/blockchain"
-	"github.com/EXCCoin/exccd/wire"
 	"github.com/EXCCoin/exccd/chaincfg"
+	"github.com/EXCCoin/exccd/wire"
 
+	"github.com/EXCCoin/gominer/nvml"
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
-	"github.com/EXCCoin/gominer/nvml"
 
-	cptr "github.com/mattn/go-pointer"
 	"github.com/barnex/cuda5/cu"
+	cptr "github.com/mattn/go-pointer"
 )
 
 //export equihashProxyGominer
@@ -96,10 +96,10 @@ type Device struct {
 	midstate  [8]uint32
 	lastBlock [16]uint32
 
-	work          work.Work
-	newWork       chan *work.Work
-	workDone      chan []byte
-	hasWork       bool
+	work     work.Work
+	newWork  chan *work.Work
+	workDone chan []byte
+	hasWork  bool
 
 	started          uint32
 	allDiffOneShares uint64

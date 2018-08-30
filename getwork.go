@@ -19,10 +19,10 @@ import (
 
 	"github.com/btcsuite/go-socks/socks"
 
+	"github.com/EXCCoin/exccd/wire"
 	"github.com/EXCCoin/gominer/stratum"
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
-	"github.com/EXCCoin/exccd/wire"
 )
 
 // newHTTPClient returns a new HTTP client that is configured according to the

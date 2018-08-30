@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EXCCoin/exccd/exccutil"
 	"github.com/btcsuite/btclog"
 	"github.com/btcsuite/go-flags"
-	"github.com/EXCCoin/exccd/exccutil"
 )
 
 const (

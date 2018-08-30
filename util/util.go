@@ -96,5 +96,5 @@ func Uint32EndiannessSwap(v uint32) uint32 {
 
 // FormatHashRate sets the units properly when displaying a hashrate.
 func FormatHashRate(hashesPerSec float64) string {
-	return fmt.Sprintf("%.1f Hashes/h", hashesPerSec * 60 * 60)
+	return fmt.Sprintf("%.1f Hashes/h", hashesPerSec*60*60)
 }
