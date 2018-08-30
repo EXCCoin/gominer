@@ -134,14 +134,14 @@ func (d *Device) PrintStats() {
 	defer d.Unlock()
 
 	averageHashRate, fanPercent, temperature := d.Status()
-	log := fmt.Sprintf("DEV #%d (%s) %v", d.index, d.deviceName, util.FormatHashRate(averageHashRate))
+	log := fmt.Sprintf("DEV #%d (%s) (%v) (allDiffOneShares=%d)", d.index, d.deviceName, util.FormatHashRate(averageHashRate), d.allDiffOneShares)
 
 	if fanPercent != 0 {
-		log = fmt.Sprintf("%s Fan=%v%%", log, fanPercent)
+		log = fmt.Sprintf("%s (Fan=%v%%)", log, fanPercent)
 	}
 
 	if temperature != 0 {
-		log = fmt.Sprintf("%s T=%vC", log, temperature)
+		log = fmt.Sprintf("%s (T=%vC)", log, temperature)
 	}
 
 	minrLog.Info(log)
@@ -394,14 +394,14 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 	hashNum := d.work.BlockHeader.BlockHash()
 	hashNumBig := blockchain.HashToBig(&hashNum)
 
+	d.allDiffOneShares++
+
 	if hashNumBig.Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
 		minrLog.Debugf("DEV #%d Found hash %s above minimum target %s",
 			d.index, hashNumBig.String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
 		d.invalidShares++
 		return
 	}
-
-	d.allDiffOneShares++
 
 	if !cfg.Benchmark {
 		// Assess versus the pool or daemon target.
@@ -490,7 +490,7 @@ func (d *Device) runDevice() error {
 			equihashInputLog = fmt.Sprintf("%s%d", equihashInputLog, int(e))
 		}
 
-		minrLog.Infof("EquihashSolveCuda(workId=%d, equihashInput=[%s], nonce=%d, extraNonce=%d)", d.currentWorkID, equihashInputLog, d.work.BlockHeader.Nonce, d.extraNonce)
+		minrLog.Tracef("EquihashSolveCuda(workId=%d, equihashInput=[%s], nonce=%d, extraNonce=%d)", d.currentWorkID, equihashInputLog, d.work.BlockHeader.Nonce, d.extraNonce)
 		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
 
 		elapsedTime := time.Since(currentTime)

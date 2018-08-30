@@ -26,8 +26,7 @@ func NewWork(blockHeader wire.BlockHeader, target *big.Int, jobTime uint32, time
 	}
 }
 
-// Work holds the data returned from getwork and if needed some stratum related
-// values.
+// Work holds the data returned from getwork and if needed some stratum related values.
 type Work struct {
 	BlockHeader  wire.BlockHeader
 	Target       *big.Int
