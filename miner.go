@@ -155,6 +155,12 @@ func (m *Miner) printStatsThread() {
 	defer t.Stop()
 
 	for {
+		select {
+		case <-m.quit:
+			return
+		case <-t.C:
+		}
+
 		if !cfg.Benchmark {
 			valid, rejected, stale, total, utility := m.Status()
 
@@ -184,13 +190,6 @@ func (m *Miner) printStatsThread() {
 			if d.fanControlActive {
 				d.fanControl()
 			}
-		}
-
-		select {
-		case <-m.quit:
-			return
-		case <-t.C:
-		case <-m.needsWorkRefresh:
 		}
 	}
 }
