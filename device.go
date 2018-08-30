@@ -182,7 +182,7 @@ func (d *Device) Release() {
 }
 
 func (d *Device) handleEquihashSolution(solution []byte) {
-	minrLog.Debugf("GPU #%d: Found candidate: %08x, workID %08x, timestamp %08x",
+	minrLog.Tracef("GPU #%d: Found candidate: %08x, workID %08x, timestamp %08x",
 		d.index, solution, util.Uint32EndiannessSwap(d.currentWorkID), d.lastBlock[work.TimestampWord])
 
 	// Assess the work. If it's below target, it'll be rejected
@@ -194,16 +194,14 @@ func (d *Device) handleEquihashSolution(solution []byte) {
 func (d *Device) updateCurrentWork() {
 	var w *work.Work
 	if d.hasWork {
-		// If we already have work, we just need to check if there's new one
-		// without blocking if there's not.
+		// If we already have work, we just need to check if there's new one without blocking if there's not.
 		select {
 		case w = <-d.newWork:
 		default:
 			return
 		}
 	} else {
-		// If we don't have work, we block until we do. We need to watch for
-		// quit events too.
+		// If we don't have work, we block until we do. We need to watch for quit events too.
 		select {
 		case w = <-d.newWork:
 		case <-d.quit:
@@ -476,7 +474,7 @@ func (d *Device) runDevice() error {
 			nonce = 0
 		}
 
-		d.work.BlockHeader.Nonce = uint32(nonce)
+		d.work.BlockHeader.Nonce = uint32(nonce) // TODO
 
 		// Execute the kernel and follow its execution time.
 		currentTime := time.Now()
@@ -485,12 +483,8 @@ func (d *Device) runDevice() error {
 		if err != nil {
 			continue
 		}
-		equihashInputLog := ""
-		for _, e := range equihashInput {
-			equihashInputLog = fmt.Sprintf("%s%d", equihashInputLog, int(e))
-		}
 
-		minrLog.Tracef("EquihashSolveCuda(workId=%d, equihashInput=[%s], nonce=%d, extraNonce=%d)", d.currentWorkID, equihashInputLog, d.work.BlockHeader.Nonce, d.extraNonce)
+		minrLog.Tracef("EquihashSolveCuda(workId=%d, blockHeight=%d, nonce=%d, extraNonce=%d)", d.currentWorkID, d.work.BlockHeader.Height, d.work.BlockHeader.Nonce, d.extraNonce)
 		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
 
 		elapsedTime := time.Since(currentTime)
