@@ -10,7 +10,6 @@ package main
 */
 import "C"
 import (
-	"encoding/hex"
 	"sync/atomic"
 	"time"
 	"bytes"
@@ -213,7 +212,6 @@ func (d *Device) updateCurrentWork() {
 	}
 
 	d.work = *w
-	minrLog.Tracef("pre-nonce: %v", hex.EncodeToString(d.work.Data[:]))
 
 	// Bump and set the work ID if the work is new.
 	d.currentWorkID++

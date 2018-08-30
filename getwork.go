@@ -194,7 +194,7 @@ func GetWork() (*work.Work, error) {
 
 	blockHeader := wire.BlockHeader{}
 	blockHeader.FromBytes(workData[:])
-	w := work.NewWork(workData, blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true)
+	w := work.NewWork(blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true)
 	w.Target = bigTarget
 
 	return w, nil

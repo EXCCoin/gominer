@@ -16,9 +16,8 @@ const (
 )
 
 // NewWork is the constructor for Work.
-func NewWork(data [GetworkDataLen]byte, blockHeader wire.BlockHeader, target *big.Int, jobTime uint32, timeReceived uint32, isGetWork bool) *Work {
+func NewWork(blockHeader wire.BlockHeader, target *big.Int, jobTime uint32, timeReceived uint32, isGetWork bool) *Work {
 	return &Work{
-		Data:         data,
 		BlockHeader:  blockHeader,
 		Target:       target,
 		JobTime:      jobTime,
@@ -30,7 +29,6 @@ func NewWork(data [GetworkDataLen]byte, blockHeader wire.BlockHeader, target *bi
 // Work holds the data returned from getwork and if needed some stratum related
 // values.
 type Work struct {
-	Data         [GetworkDataLen]byte
 	BlockHeader  wire.BlockHeader
 	Target       *big.Int
 	JobTime      uint32
