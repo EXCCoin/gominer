@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/davecgh/go-spew/spew"
-
 	"github.com/btcsuite/go-socks/socks"
 
 	"github.com/EXCCoin/exccd/chaincfg"
@@ -932,7 +931,7 @@ func (s *Stratum) PrepWork() error {
 		return err
 	}
 
-	var workData [320]byte
+	var workData [work.GetworkDataLen]byte
 	copy(workData[:], workdata[:])
 	givenTs := binary.LittleEndian.Uint32(
 		workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
@@ -953,7 +952,7 @@ func (s *Stratum) PrepWork() error {
 
 	w := work.NewWork(workData, bh, s.Target, givenTs, uint32(time.Now().Unix()), false)
 
-	log.Tracef("Stratum prepated work data %v, target %032x",
+	log.Tracef("Stratum prepared work data %v, target %032x",
 		hex.EncodeToString(w.Data[:]), w.Target.Bytes())
 	s.PoolWork.Work = w
 
@@ -963,8 +962,7 @@ func (s *Stratum) PrepWork() error {
 // PrepSubmit formats a mining.sumbit message from the solved work.
 func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	log.Debugf("Stratum got valid work to submit %x", data)
-	log.Debugf("Stratum got valid work hash %v",
-		chainhash.HashH(data[0:180]))
+	log.Debugf("Stratum got valid work hash %v", chainhash.HashH(data[0:180]))
 	data2 := make([]byte, 180)
 	copy(data2, data[0:180])
 

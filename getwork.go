@@ -174,8 +174,8 @@ func GetWork() (*work.Work, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(data) != 320 {
-		return nil, fmt.Errorf("Wrong data length: got %d, expected 320", len(data))
+	if len(data) != work.GetworkDataLen {
+		return nil, fmt.Errorf("Wrong data length: got %d, expected %d", len(data), work.GetworkDataLen)
 	}
 	target, err := hex.DecodeString(res.Result.Target)
 	if err != nil {
@@ -188,7 +188,7 @@ func GetWork() (*work.Work, error) {
 	bigTarget := new(big.Int)
 	bigTarget.SetBytes(util.Reverse(target))
 
-	var workData [320]byte
+	var workData [work.GetworkDataLen]byte
 	copy(workData[:], data)
 	givenTs := binary.LittleEndian.Uint32(workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 

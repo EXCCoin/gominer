@@ -408,19 +408,18 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 	if !cfg.Benchmark {
 		// Assess versus the pool or daemon target.
 		if hashNumBig.Cmp(d.work.Target) > 0 {
-			minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)",
-				d.index, hashNumBig, d.work.Target.Bytes())
+			minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)", d.index, hashNumBig, d.work.Target.Bytes())
 		} else {
 			minrLog.Infof("DEV #%d Found hash with work below target! %v (yay)", d.index, hashNum)
 			d.validShares++
-			data := make([]byte, 0, 320)
+			data := make([]byte, 0, work.GetworkDataLen)
 			buf := bytes.NewBuffer(data)
 			err := d.work.BlockHeader.Serialize(buf)
 			if err != nil {
 				errStr := fmt.Sprintf("Failed to serialize data: %v", err)
 				minrLog.Errorf("Error submitting work: %v", errStr)
 			} else {
-				data = data[:320]
+				data = data[:work.GetworkDataLen]
 				d.workDone <- data
 			}
 		}
