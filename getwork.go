@@ -166,8 +166,7 @@ func GetWork() (*work.Work, error) {
 	}
 
 	if res.Error != nil {
-		return nil, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code,
-			res.Error.Message)
+		return nil, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code, res.Error.Message)
 	}
 
 	data, err := hex.DecodeString(res.Result.Data)

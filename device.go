@@ -461,8 +461,7 @@ func (d *Device) runDevice() error {
 		d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
 		binary.LittleEndian.PutUint64(d.work.BlockHeader.ExtraData[:], uint64(d.extraNonce))
 
-		// Update the timestamp. Only solo work allows you to roll
-		// the timestamp.
+		// Update the timestamp. Only solo work allows you to roll the timestamp.
 		ts := d.work.JobTime
 		if d.work.IsGetWork {
 			diffSeconds := uint32(time.Now().Unix()) - d.work.TimeReceived
