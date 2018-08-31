@@ -5,6 +5,7 @@
 
 #pragma once
 #include <cstdint>
+#include "portable_endian.h"
 #include "blake/blake2.h"
 
 typedef unsigned char uchar;
@@ -162,7 +163,7 @@ __device__ void blake2b_gpu_hash(blake2b_state *state, u32 idx, uchar *hash, u32
   ROUND( 9 );
   ROUND( 10 );
   ROUND( 11 );
-  
+
   state->h[0] ^= v[0] ^ v[ 8];
   state->h[1] ^= v[1] ^ v[ 9];
   state->h[2] ^= v[2] ^ v[10];

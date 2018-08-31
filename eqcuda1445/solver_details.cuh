@@ -15,8 +15,10 @@
 #include "osx_barrier.h"
 #endif
 
+#if !defined(_WIN16) && !defined(_WIN32) && !defined(_WIN64) && !defined(__WINDOWS__)
 #pragma clang diagnostic push
 #pragma ide diagnostic ignored "OCUnusedGlobalDeclarationInspection"
+#endif
 
 #define RESTBITS 4
 // 2_log of number of buckets
@@ -295,13 +297,13 @@ void expand_array(const uchar *in, u64 in_len, uchar *out, u64 out_len, u64 bit_
 }
 
 void uncompress_solution(const cproof sol, proof output) {
-    u64 collision_bit_length = WN / (WK + 1);
-    u64 solution_width       = (1 << WK) * (collision_bit_length + 1) / 8;
+    const u64 collision_bit_length = WN / (WK + 1);
+    const u64 solution_width       = (1 << WK) * (collision_bit_length + 1) / 8;
 
     assert(((collision_bit_length + 1) + 7) / 8 <= sizeof(u32));
 
-    u64 len_indices{8 * sizeof(u32) * solution_width / (collision_bit_length + 1)};
-    u64 byte_pad{sizeof(u32) - ((collision_bit_length + 1) + 7) / 8};
+    const u64 len_indices{8 * sizeof(u32) * solution_width / (collision_bit_length + 1)};
+    const u64 byte_pad{sizeof(u32) - ((collision_bit_length + 1) + 7) / 8};
 
     uchar array[len_indices];
     expand_array(sol, solution_width, array, len_indices, collision_bit_length + 1, byte_pad);
