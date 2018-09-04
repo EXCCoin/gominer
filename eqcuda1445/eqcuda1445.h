@@ -1,3 +1,5 @@
+// Copyright (c) 2018 The ExchangeCoin team
+
 #pragma once
 #include <stdint.h>
 

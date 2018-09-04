@@ -5,6 +5,12 @@
 #include <string>
 #include <functional>
 
+#if defined(__GNUC__) || defined(__GNUG__)
+#define DLLEXPORT __attribute__ ((dllexport))
+#elif defined(_MSC_VER)
+#define DLLEXPORT __declspec(dllexport)
+#endif
+
 #define WN                  (144)      //
 #define WK                  (5)        // algorithm parameters, prefixed with W (for Wagner) to reduce include file conflicts
 #define BLAKE_PERSONAL      "ZcashPoW"
@@ -45,28 +51,28 @@ inline const char *verify_code_str(verify_code code) {
 }
 
 
-verify_code equihash_verify(const char *header, u64 header_len, u32 nonce, const cproof indices);
+DLLEXPORT verify_code equihash_verify(const char *header, u64 header_len, u32 nonce, const cproof indices);
 
-verify_code equihash_verify(const std::string &header, u32 nonce, const cproof indices);
+DLLEXPORT verify_code equihash_verify(const std::string &header, u32 nonce, const cproof indices);
 
-extern "C" int equihash_verify_c(const char *header, u64 header_len, u32 nonce, const cproof indices);
+extern "C" DLLEXPORT int equihash_verify_c(const char *header, u64 header_len, u32 nonce, const cproof indices);
 
-verify_code equihash_verify_uncompressed(const char *header, u64 header_len, u32 nonce, const proof indices);
+DLLEXPORT verify_code equihash_verify_uncompressed(const char *header, u64 header_len, u32 nonce, const proof indices);
 
-verify_code equihash_verify_uncompressed(const std::string &header, u32 nonce, const proof indices);
+DLLEXPORT verify_code equihash_verify_uncompressed(const std::string &header, u32 nonce, const proof indices);
 
-extern "C" int equihash_verify_uncompressed_c(const char *header, u64 header_len, u32 nonce, const proof indices);
+extern "C" DLLEXPORT int equihash_verify_uncompressed_c(const char *header, u64 header_len, u32 nonce, const proof indices);
 
 
-int equihash_solve(const char *header, u64 header_len,
-                   u32 nonce,
-                   std::function<void(const cproof)> on_solution_found);
+DLLEXPORT int equihash_solve(const char *header, u64 header_len,
+                             u32 nonce,
+                             std::function<void(const cproof)> on_solution_found);
 
-int equihash_solve(const std::string &header,
-                   u32 nonce,
-                   std::function<void(const cproof)> on_solution_found);
+DLLEXPORT int equihash_solve(const std::string &header,
+                             u32 nonce,
+                             std::function<void(const cproof)> on_solution_found);
 
-extern "C" int equihash_solve_c(const char *header, u64 header_len,
-                                u32 nonce,
-                                void (*on_solution_found)(void *user_data, const cproof solution),
-                                void *user_data);
+extern "C" DLLEXPORT int equihash_solve_c(const char *header, u64 header_len,
+                                          u32 nonce,
+                                          void (*on_solution_found)(void *user_data, const cproof solution),
+                                          void *user_data);

@@ -5,12 +5,11 @@
 #pragma once
 #include "blake/blake2.h"
 #include "blake2b.cuh"
-#include "eqcuda1445.cuh"
 #include "portable_endian.h"
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring> // for functions memset
+#include <cstring>
 #ifdef __APPLE__
 #include "osx_barrier.h"
 #endif
@@ -178,7 +177,7 @@ verify_code verifyrec(const blake2b_state *ctx, const proof indices, uchar *hash
         return verify_code::POW_OK;
     }
 
-    const u32 *indices1 = indices + (1 << (r - 1));
+    const u32 *indices1 = indices + u32(1 << (r - 1));
     if (*indices >= *indices1)
         return verify_code::POW_OUT_OF_ORDER;
 
@@ -1081,4 +1080,6 @@ __global__ void digitK(equi *eq) {
     }
 }
 
+#if !defined(_WIN16) && !defined(_WIN32) && !defined(_WIN64) && !defined(__WINDOWS__)
 #pragma clang diagnostic pop
+#endif

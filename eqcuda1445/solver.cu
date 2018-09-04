@@ -2,6 +2,7 @@
 // Copyright (c) 2016 John Tromp
 // Copyright (c) 2018 The ExchangeCoin team
 
+#include "eqcuda1445.cuh"
 #include "solver_details.cuh"
 
 verify_code equihash_verify_uncompressed(const char *header, u64 header_len, u32 nonce, const proof indices) {
