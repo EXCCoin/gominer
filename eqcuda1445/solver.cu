@@ -53,7 +53,7 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
     }
 
     if (range > 1)
-        printf("-%%llu", nonce + range - 1);
+        printf("-%llu", nonce + range - 1);
 
     printf(") with %d %d-bits digits and %llu threads (%llu per block)\n", NDIGITS, DIGITBITS, nthreads, tpb);
     equi eq(static_cast<u32>(nthreads));

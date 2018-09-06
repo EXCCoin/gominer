@@ -5,8 +5,8 @@ package main
 /*
 #cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
 #cgo CFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
-#cgo !windows LDFLAGS: -Lobj -leqcuda1445
-#cgo windows LDFLAGS: -Lobj -leqcuda1445
+#cgo !windows LDFLAGS: -L. -leqcuda1445
+#cgo windows LDFLAGS: -L. -leqcuda1445
 #include "eqcuda1445/eqcuda1445.h"
 */
 import "C"

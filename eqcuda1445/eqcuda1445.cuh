@@ -6,7 +6,7 @@
 #include <functional>
 
 #if defined(__GNUC__) || defined(__GNUG__)
-#define DLLEXPORT __attribute__ ((dllexport))
+#define DLLEXPORT
 #elif defined(_MSC_VER)
 #define DLLEXPORT __declspec(dllexport)
 #endif
