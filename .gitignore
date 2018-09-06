@@ -30,8 +30,10 @@ kernel/
 gominer
 
 vendor/
+.vendor-new/
 
 
 \.idea/
 \.vs/
 eqcuda1445/x64/
+obj/

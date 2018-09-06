@@ -3,7 +3,8 @@
 package main
 
 /*
-#cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -std=c++17 -Wall -Wno-strict-aliasing -Wno-shift-count-overflow -Werror
+#cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
+#cgo CFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
 #cgo !windows LDFLAGS: -Lobj -leqcuda1445
 #cgo windows LDFLAGS: -Lobj -leqcuda1445
 #include "eqcuda1445/eqcuda1445.h"
@@ -27,7 +28,7 @@ import (
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
 
-	"github.com/barnex/cuda5/cu"
+	"github.com/EXCCoin/gominer/cu"
 	cptr "github.com/mattn/go-pointer"
 )
 
@@ -508,7 +509,6 @@ func ListDevices() {
 }
 
 func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan []byte) (*Device, error) {
-
 	d := &Device{
 		index:       index,
 		cuDeviceID:  deviceID,

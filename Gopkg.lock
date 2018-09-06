@@ -39,14 +39,6 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:54bea804bed7ff425796be010fc1dcc8a2a8ff9e02f670607d63a9eca1b1e608"
-  name = "github.com/barnex/cuda5"
-  packages = ["cu"]
-  pruneopts = ""
-  revision = "57cec7ab46da74b8ca2aa1d41e898c0646081b56"
-
-[[projects]]
-  branch = "master"
   digest = "1:30d4a548e09bca4a0c77317c58e7407e2a65c15325e944f9c08a7b7992f8a59e"
   name = "github.com/btcsuite/btclog"
   packages = ["."]
@@ -109,7 +101,6 @@
     "github.com/EXCCoin/exccd/chaincfg/chainhash",
     "github.com/EXCCoin/exccd/exccutil",
     "github.com/EXCCoin/exccd/wire",
-    "github.com/barnex/cuda5/cu",
     "github.com/btcsuite/btclog",
     "github.com/btcsuite/go-flags",
     "github.com/btcsuite/go-socks/socks",
