@@ -3,9 +3,9 @@ package cu
 // This file implements CUDA driver device management
 
 /*
-#cgo !windows CXXFLAGS: -O3 -march=x86-64 -mtune=generic
-#cgo !windows CFLAGS: -O3 -march=x86-64 -mtune=generic
-#cgo !windows LDFLAGS: -lcuda -lcudart
+#cgo !windows CXXFLAGS: -O3 -march=x86-64 -mtune=generic -Wno-deprecated-declarations
+#cgo !windows CFLAGS: -O3 -march=x86-64 -mtune=generic -Wno-deprecated-declarations
+#cgo !windows LDFLAGS: -lcuda -lcudart_static -ldl -lrt
 #cgo windows CXXFLAGS: -I"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/include" -O3 -march=x86-64 -mtune=generic
 #cgo windows CFLAGS: -I"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/include" -O3 -march=x86-64 -mtune=generic
 #cgo windows LDFLAGS: -L"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/lib/x64" -lcuda -lcudart
