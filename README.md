@@ -1,3 +1,4 @@
+
 # gominer
 gominer is an application for performing Proof-of-Work (PoW) mining on the
 Exchange Coin network. It supports solo and stratum/pool mining using CUDA.
@@ -59,34 +60,33 @@ $ curl http://localhost:3333/
 
 ## Building on Linux
 #### Pre-Requisites
-You will either need to install CUDA for NVIDIA graphics cards or OpenCL library/headers that support your device such as: AMDGPU-PRO (for newer AMD cards), Beignet (for Intel Graphics), or Catalyst (for older AMD cards).
-
-For example, on Ubuntu 16.04 you can install the necessary OpenCL packages (for Intel Graphics) and CUDA libraries with:
-```
-sudo apt-get install beignet-dev nvidia-cuda-dev nvidia-cuda-toolkit
-```
-
-gominer has been built successfully on Ubuntu 16.04 with go1.6.2, go1.7.1, g++ 5.4.0, and beignet-dev 1.1.1-2 although other combinations should work as well.
+- Download and install Go >= v1.10
+  * Make sure you've got properly set `GOROOT` and `GOPATH` environment variables
+  * Make sure you've got `$GOPATH\bin` in your `PATH`
+- Install [dep](https://github.com/golang/dep): `go get -u github.com/golang/dep/cmd/dep`
+- Install Nvidia drivers >= v399.07
+- Install CUDA >= v9.2 from [here](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64) (you can follow [this](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) instruction)
+  * Add those lines to your `.bashrc` file:
+	```
+	export CUDA_HOME=/usr/local/cuda-9.2
+	export PATH=${CUDA_HOME}/bin${PATH:+:${PATH}}
+	export C_INCLUDE_PATH=${CUDA_HOME}/include:${C_INCLUDE_PATH}
+	export LD_LIBRARY_PATH=${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+	export LIBRARY_PATH=${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+	export CUDACXX=$(which nvcc)
+	```
+- Reload your `ld` cache: `sudo rm /etc/ld.so.cache && sudo ldconfig && sudo ldconfig -v`
 
 #### Instructions
-To download and build gominer, run:
 ```
-go get -u github.com/golang/dep/cmd/dep
-mkdir -p $GOPATH/src/github.com/decred
-cd $GOPATH/src/github.com/decred
-git clone  https://github.com/decred/gominer.git
-cd gominer
-dep ensure
-```
-
-For CUDA with NVIDIA Management Library (NVML) support:
-```
-make
+go get github.com/EXCCoin/gominer
+cd $GOPATH/src/github.com/EXCCoin/gominer
+./build.sh
 ```
 
 ## Building on Windows
 #### Pre-Requisites
-- Download and install the official Go Windows binaries >= v1.9 from [here](https://golang.org/dl/)
+- Download and install the official Go Windows binaries >= v1.10 from [here](https://golang.org/dl/)
   * Make sure you've got properly set `GOROOT` and `GOPATH` environment variables
   * Make sure you've got `%GOPATH%\bin` in your `PATH`
 - Download and install Git for Windows from [here](https://git-scm.com/download/win)
@@ -104,6 +104,7 @@ make
 
 #### Instructions
 ```
+go get github.com/EXCCoin/gominer
 cd $GOPATH/src/github.com/EXCCoin/gominer
 build.bat
 ```
