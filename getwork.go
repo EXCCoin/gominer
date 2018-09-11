@@ -187,12 +187,10 @@ func GetWork() (*work.Work, error) {
 	bigTarget := new(big.Int)
 	bigTarget.SetBytes(util.Reverse(target))
 
-	var workData [work.GetworkDataLen]byte
-	copy(workData[:], data)
-	givenTs := binary.LittleEndian.Uint32(workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
+	givenTs := binary.LittleEndian.Uint32(data[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 
 	blockHeader := wire.BlockHeader{}
-	blockHeader.FromBytes(workData[:])
+	blockHeader.FromBytes(data[:])
 	w := work.NewWork(blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true)
 	w.Target = bigTarget
 

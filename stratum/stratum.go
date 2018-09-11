@@ -834,8 +834,7 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 
 // PrepWork converts the stratum notify to getwork style data for mining.
 func (s *Stratum) PrepWork() error {
-	// Build final extranonce, which is basically the pool user and worker
-	// ID.
+	// Build final extranonce, which is basically the pool user and worker ID.
 	en1, err := hex.DecodeString(s.PoolWork.ExtraNonce1)
 	if err != nil {
 		log.Error("Error decoding ExtraNonce1.")
@@ -898,7 +897,7 @@ func (s *Stratum) PrepWork() error {
 	data := blockHeader
 	copy(data[31:139], cb1[0:108])
 
-	var workdata [180]byte
+	var workdata [work.GetworkDataLen]byte
 	workPosition := 0
 
 	version := new(bytes.Buffer)
@@ -931,10 +930,7 @@ func (s *Stratum) PrepWork() error {
 		return err
 	}
 
-	var workData [work.GetworkDataLen]byte
-	copy(workData[:], workdata[:])
-	givenTs := binary.LittleEndian.Uint32(
-		workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
+	givenTs := binary.LittleEndian.Uint32(workdata[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 	atomic.StoreUint32(&s.latestJobTime, givenTs)
 
 	if s.Target == nil {
@@ -960,8 +956,6 @@ func (s *Stratum) PrepWork() error {
 func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	log.Debugf("Stratum got valid work to submit %x", data)
 	log.Debugf("Stratum got valid work hash %v", chainhash.HashH(data[0:180]))
-	data2 := make([]byte, 180)
-	copy(data2, data[0:180])
 
 	sub := Submit{}
 	sub.Method = "mining.submit"
