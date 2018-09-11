@@ -25,7 +25,6 @@ import (
 	"github.com/davecgh/go-spew/spew"
 
 	"github.com/EXCCoin/exccd/chaincfg"
-	"github.com/EXCCoin/exccd/chaincfg/chainhash"
 	"github.com/EXCCoin/exccd/wire"
 
 	"github.com/EXCCoin/gominer/util"
@@ -955,7 +954,6 @@ func (s *Stratum) PrepWork() error {
 // PrepSubmit formats a mining.sumbit message from the solved work.
 func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	log.Debugf("Stratum got valid work to submit %x", data)
-	log.Debugf("Stratum got valid work hash %v", chainhash.HashH(data[0:180]))
 
 	sub := Submit{}
 	sub.Method = "mining.submit"
