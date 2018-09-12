@@ -60,7 +60,7 @@ $ curl http://localhost:3333/
 
 ## Building on Linux
 #### Pre-Requisites
-- Download and install Go >= v1.10
+- Download and install Go >= v1.10 from [here](https://golang.org/dl/)
   * Make sure you've got properly set `GOROOT` and `GOPATH` environment variables
   * Make sure you've got `$GOPATH\bin` in your `PATH`
 - Install [dep](https://github.com/golang/dep): `go get -u github.com/golang/dep/cmd/dep`
@@ -86,7 +86,7 @@ cd $GOPATH/src/github.com/EXCCoin/gominer
 
 ## Building on Windows
 #### Pre-Requisites
-- Download and install the official Go Windows binaries >= v1.10 from [here](https://golang.org/dl/)
+- Download and install Go >= v1.10 from [here](https://golang.org/dl/)
   * Make sure you've got properly set `GOROOT` and `GOPATH` environment variables
   * Make sure you've got `%GOPATH%\bin` in your `PATH`
 - Download and install Git for Windows from [here](https://git-scm.com/download/win)
