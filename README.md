@@ -1,7 +1,6 @@
 
 # gominer
-gominer is an application for performing Proof-of-Work (PoW) mining on the
-Exchange Coin network. It supports solo and stratum/pool mining using CUDA.
+gominer is an application for performing Proof-of-Work (PoW) mining on the Exchange Coin network. It supports solo and stratum/pool mining using CUDA-capable devices.
 
 ## Downloading
 Linux and Windows 64-bit binaries may be downloaded from [https://github.com/EXCCoin/excc-binaries/releases/latest](https://github.com/EXCCoin/excc-binaries/releases/latest)
