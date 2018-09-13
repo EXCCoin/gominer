@@ -63,7 +63,7 @@ $ curl http://localhost:3333/
   * Make sure you've got properly set `GOROOT` and `GOPATH` environment variables
   * Make sure you've got `$GOPATH\bin` in your `PATH`
 - Install [dep](https://github.com/golang/dep): `go get -u github.com/golang/dep/cmd/dep`
-- Install Nvidia drivers v396.54
+- Install Nvidia drivers v396
 - Install CUDA v9.2 from [here](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64) (you can follow [this](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) instruction)
   * Add those lines to your `.bashrc` file:
 	```
