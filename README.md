@@ -104,6 +104,6 @@ cd $GOPATH/src/github.com/EXCCoin/gominer
 #### Instructions
 ```
 go get github.com/EXCCoin/gominer
-cd $GOPATH/src/github.com/EXCCoin/gominer
+cd %GOPATH%/src/github.com/EXCCoin/gominer
 build.bat
 ```
