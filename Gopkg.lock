@@ -3,72 +3,110 @@
 
 [[projects]]
   branch = "master"
-  name = "github.com/agl/ed25519"
-  packages = [".","edwards25519"]
-  revision = "5312a61534124124185d41f09206b9fef1d88403"
+  digest = "1:0af691762125fa5465f5a671280fa3883efc0e8b40d85821f9cd97ed39a23ae7"
+  name = "github.com/EXCCoin/base58"
+  packages = ["."]
+  pruneopts = ""
+  revision = "e1a805ee5d9f5e64352b9b509d18413991cceffb"
 
 [[projects]]
   branch = "master"
-  name = "github.com/barnex/cuda5"
-  packages = ["cu"]
-  revision = "57cec7ab46da74b8ca2aa1d41e898c0646081b56"
+  digest = "1:2423e7d4c0c0c47e8c07b17d617014a623451e05974ac0792431e06014b3191c"
+  name = "github.com/EXCCoin/exccd"
+  packages = [
+    "blockchain",
+    "blockchain/internal/dbnamespace",
+    "blockchain/internal/progresslog",
+    "blockchain/stake",
+    "blockchain/stake/internal/dbnamespace",
+    "blockchain/stake/internal/ticketdb",
+    "blockchain/stake/internal/tickettreap",
+    "cequihash",
+    "chaincfg",
+    "chaincfg/chainec",
+    "chaincfg/chainhash",
+    "database",
+    "exccec/edwards",
+    "exccec/secp256k1",
+    "exccec/secp256k1/schnorr",
+    "exccjson",
+    "exccutil",
+    "txscript",
+    "wire",
+  ]
+  pruneopts = ""
+  revision = "e16039f265b1ef082eab8bb7894bc486da1b8ce4"
 
 [[projects]]
   branch = "master"
+  digest = "1:30d4a548e09bca4a0c77317c58e7407e2a65c15325e944f9c08a7b7992f8a59e"
   name = "github.com/btcsuite/btclog"
   packages = ["."]
+  pruneopts = ""
   revision = "84c8d2346e9fc8c7b947e243b9c24e6df9fd206a"
 
 [[projects]]
   branch = "master"
+  digest = "1:540de3a469b3f3ff65d8380fd315ee758cb27d9c87eb8e42ea956638754e353b"
   name = "github.com/btcsuite/go-flags"
   packages = ["."]
+  pruneopts = ""
   revision = "6c288d648c1cc1befcb90cb5511dcacf64ae8e61"
 
 [[projects]]
   branch = "master"
+  digest = "1:422f38d57f1bc0fdc34f26d0f1026869a3710400b09b5478c9288efa13573cfa"
   name = "github.com/btcsuite/go-socks"
   packages = ["socks"]
+  pruneopts = ""
   revision = "4720035b7bfd2a9bb130b1c184f8bbe41b6f0d0f"
 
 [[projects]]
   branch = "master"
+  digest = "1:74380c03fb4e083b171eefb7cf87f44ffbf9657be2e12b2ff10bea9abede322f"
   name = "github.com/davecgh/go-spew"
   packages = ["spew"]
+  pruneopts = ""
   revision = "a476722483882dd40b8111f0eb64e1d7f43f56e4"
 
 [[projects]]
-  branch = "master"
-  name = "github.com/dchest/blake256"
-  packages = ["."]
-  revision = "dee3fe6eb0e98dc774a94fc231f85baf7c29d360"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/decred/base58"
-  packages = ["."]
-  revision = "b3520e187fa8ebe65eb74245408cf4b83e6a65d3"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/decred/dcrd"
-  packages = ["blockchain","blockchain/internal/dbnamespace","blockchain/internal/progresslog","blockchain/stake","blockchain/stake/internal/dbnamespace","blockchain/stake/internal/ticketdb","blockchain/stake/internal/tickettreap","chaincfg","chaincfg/chainec","chaincfg/chainhash","database","dcrec/edwards","dcrec/secp256k1","dcrec/secp256k1/schnorr","dcrutil","txscript","wire"]
-  revision = "f903c700a41a80f59daf21fa8489a437485dcfdb"
-
-[[projects]]
+  digest = "1:e30574e4bf5450239ddcd3dc65258f40ef205023001bd56302cb2ea403f8db68"
   name = "github.com/jrick/logrotate"
   packages = ["rotator"]
+  pruneopts = ""
   revision = "4ed05ed86ef17d10ff99cce77481e0fcf6f2c7b0"
 
 [[projects]]
   branch = "master"
+  digest = "1:e70a3aab7826271fc9e6af0ce5505b2a54375c378b54f815dd88578ea87671b7"
+  name = "github.com/mattn/go-pointer"
+  packages = ["."]
+  pruneopts = ""
+  revision = "1d30dc4b6f28271a3bd126071d4d0363e618415b"
+
+[[projects]]
+  branch = "master"
+  digest = "1:d2438f1c85d855408197edcbac2ba137513738ccefbd12396b0af99d5449880b"
   name = "golang.org/x/crypto"
   packages = ["ripemd160"]
+  pruneopts = ""
   revision = "9419663f5a44be8b34ca85f08abc5fe1be11f8a3"
 
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "ca865d509ef76e69617ba986312229371b896b2822a4aee9c5010c0c19149b7a"
+  input-imports = [
+    "github.com/EXCCoin/exccd/blockchain",
+    "github.com/EXCCoin/exccd/chaincfg",
+    "github.com/EXCCoin/exccd/chaincfg/chainhash",
+    "github.com/EXCCoin/exccd/exccutil",
+    "github.com/EXCCoin/exccd/wire",
+    "github.com/btcsuite/btclog",
+    "github.com/btcsuite/go-flags",
+    "github.com/btcsuite/go-socks/socks",
+    "github.com/davecgh/go-spew/spew",
+    "github.com/jrick/logrotate/rotator",
+    "github.com/mattn/go-pointer",
+  ]
   solver-name = "gps-cdcl"
   solver-version = 1

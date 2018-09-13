@@ -1,6 +1,12 @@
 package nvml
 
 /*
+#cgo !windows CXXFLAGS: -O3 -march=x86-64 -mtune=generic
+#cgo !windows CFLAGS: -O3 -march=x86-64 -mtune=generic
+#cgo !windows LDFLAGS: -L/opt/cuda/lib64 -L/opt/cuda/lib -L/usr/local/cuda/lib64 -L/usr/lib/nvidia-396 -lnvidia-ml
+#cgo windows CXXFLAGS: -I"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/include" -O3 -march=x86-64 -mtune=generic
+#cgo windows CFLAGS: -I"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/include" -O3 -march=x86-64 -mtune=generic
+#cgo windows LDFLAGS: -L"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/lib/x64" -lnvml
 #include <stdio.h>
 #include <stdlib.h>
 #include <nvml.h>

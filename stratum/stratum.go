@@ -21,16 +21,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/btcsuite/go-socks/socks"
 	"github.com/davecgh/go-spew/spew"
 
-	"github.com/btcsuite/go-socks/socks"
+	"github.com/EXCCoin/exccd/chaincfg"
+	"github.com/EXCCoin/exccd/wire"
 
-	"github.com/decred/dcrd/chaincfg"
-	"github.com/decred/dcrd/chaincfg/chainhash"
-	"github.com/decred/dcrd/wire"
-
-	"github.com/decred/gominer/util"
-	"github.com/decred/gominer/work"
+	"github.com/EXCCoin/gominer/util"
+	"github.com/EXCCoin/gominer/work"
 )
 
 var chainParams = &chaincfg.MainNetParams
@@ -835,8 +833,7 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 
 // PrepWork converts the stratum notify to getwork style data for mining.
 func (s *Stratum) PrepWork() error {
-	// Build final extranonce, which is basically the pool user and worker
-	// ID.
+	// Build final extranonce, which is basically the pool user and worker ID.
 	en1, err := hex.DecodeString(s.PoolWork.ExtraNonce1)
 	if err != nil {
 		log.Error("Error decoding ExtraNonce1.")
@@ -899,7 +896,7 @@ func (s *Stratum) PrepWork() error {
 	data := blockHeader
 	copy(data[31:139], cb1[0:108])
 
-	var workdata [180]byte
+	var workdata [work.GetworkDataLen]byte
 	workPosition := 0
 
 	version := new(bytes.Buffer)
@@ -932,10 +929,7 @@ func (s *Stratum) PrepWork() error {
 		return err
 	}
 
-	var workData [192]byte
-	copy(workData[:], workdata[:])
-	givenTs := binary.LittleEndian.Uint32(
-		workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
+	givenTs := binary.LittleEndian.Uint32(workdata[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 	atomic.StoreUint32(&s.latestJobTime, givenTs)
 
 	if s.Target == nil {
@@ -951,10 +945,7 @@ func (s *Stratum) PrepWork() error {
 		return nil
 	}
 
-	w := work.NewWork(workData, s.Target, givenTs, uint32(time.Now().Unix()), false)
-
-	log.Tracef("Stratum prepated work data %v, target %032x",
-		hex.EncodeToString(w.Data[:]), w.Target.Bytes())
+	w := work.NewWork(bh, s.Target, givenTs, uint32(time.Now().Unix()), false)
 	s.PoolWork.Work = w
 
 	return nil
@@ -963,10 +954,6 @@ func (s *Stratum) PrepWork() error {
 // PrepSubmit formats a mining.sumbit message from the solved work.
 func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	log.Debugf("Stratum got valid work to submit %x", data)
-	log.Debugf("Stratum got valid work hash %v",
-		chainhash.HashH(data[0:180]))
-	data2 := make([]byte, 180)
-	copy(data2, data[0:180])
 
 	sub := Submit{}
 	sub.Method = "mining.submit"

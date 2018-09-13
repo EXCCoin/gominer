@@ -19,9 +19,10 @@ import (
 
 	"github.com/btcsuite/go-socks/socks"
 
-	"github.com/decred/gominer/stratum"
-	"github.com/decred/gominer/util"
-	"github.com/decred/gominer/work"
+	"github.com/EXCCoin/exccd/wire"
+	"github.com/EXCCoin/gominer/stratum"
+	"github.com/EXCCoin/gominer/util"
+	"github.com/EXCCoin/gominer/work"
 )
 
 // newHTTPClient returns a new HTTP client that is configured according to the
@@ -165,36 +166,32 @@ func GetWork() (*work.Work, error) {
 	}
 
 	if res.Error != nil {
-		return nil, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code,
-			res.Error.Message)
+		return nil, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code, res.Error.Message)
 	}
 
 	data, err := hex.DecodeString(res.Result.Data)
 	if err != nil {
 		return nil, err
 	}
-	if len(data) != 192 {
-		return nil, fmt.Errorf("Wrong data length: got %d, expected 192",
-			len(data))
+	if len(data) != work.GetworkDataLen {
+		return nil, fmt.Errorf("Wrong data length: got %d, expected %d", len(data), work.GetworkDataLen)
 	}
 	target, err := hex.DecodeString(res.Result.Target)
 	if err != nil {
 		return nil, err
 	}
 	if len(target) != 32 {
-		return nil, fmt.Errorf("Wrong target length: got %d, expected 32",
-			len(target))
+		return nil, fmt.Errorf("Wrong target length: got %d, expected 32", len(target))
 	}
 
 	bigTarget := new(big.Int)
 	bigTarget.SetBytes(util.Reverse(target))
 
-	var workData [192]byte
-	copy(workData[:], data)
-	givenTs := binary.LittleEndian.Uint32(
-		workData[128+4*work.TimestampWord : 132+4*work.TimestampWord])
-	w := work.NewWork(workData, bigTarget, givenTs, uint32(time.Now().Unix()), true)
+	givenTs := binary.LittleEndian.Uint32(data[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 
+	blockHeader := wire.BlockHeader{}
+	blockHeader.FromBytes(data[:])
+	w := work.NewWork(blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true)
 	w.Target = bigTarget
 
 	return w, nil
@@ -240,8 +237,7 @@ func GetWorkSubmit(data []byte) (bool, error) {
 	}
 	url := protocol + "://" + cfg.RPCServer
 	hexData := hex.EncodeToString(data)
-	jsonStr := []byte(`{"jsonrpc": "2.0", "method": "getwork", "params": ["` +
-		hexData + `"], "id": 1}`)
+	jsonStr := []byte(`{"jsonrpc": "2.0", "method": "getwork", "params": ["` + hexData + `"], "id": 1}`)
 	bodyBuff := bytes.NewBuffer(jsonStr)
 	httpRequest, err := http.NewRequest("POST", url, bodyBuff)
 	if err != nil {
@@ -272,8 +268,7 @@ func GetWorkSubmit(data []byte) (bool, error) {
 	}
 
 	if httpResponse.Status != "200 OK" {
-		return false, fmt.Errorf("error calling getwork (%s): %s",
-			httpResponse.Status, body)
+		return false, fmt.Errorf("error calling getwork (%s): %s", httpResponse.Status, body)
 	}
 
 	var res getWorkSubmitResponseJson
@@ -283,8 +278,7 @@ func GetWorkSubmit(data []byte) (bool, error) {
 	}
 
 	if res.Error != nil {
-		return false, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code,
-			res.Error.Message)
+		return false, fmt.Errorf("JSONRPC Error %d: %s", res.Error.Code, res.Error.Message)
 	}
 
 	return res.Result, nil

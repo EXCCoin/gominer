@@ -15,7 +15,7 @@ var (
 )
 
 func gominerMain() error {
-	// Load configuration and parse command line.  This function also
+	// Load configuration and parse command line. This function also
 	// initializes logging and configures it accordingly.
 	tcfg, _, err := loadConfig()
 	if err != nil {
@@ -29,19 +29,17 @@ func gominerMain() error {
 	}()
 
 	// Show version at startup.
-	mainLog.Infof("Version %s %s (Go version %s)",
-		version(), gpuLib(), runtime.Version())
+	mainLog.Infof("Version %s %s (Go version %s)", version(), gpuLib(), runtime.Version())
 
 	// Enable http profiling server if requested.
 	if cfg.Profile != "" {
 		go func() {
 			listenAddr := net.JoinHostPort("", cfg.Profile)
-			mainLog.Infof("Creating profiling server "+
-				"listening on %s", listenAddr)
-			profileRedirect := http.RedirectHandler("/debug/pprof",
-				http.StatusSeeOther)
+			mainLog.Infof("Creating profiling server listening on %s", listenAddr)
+			profileRedirect := http.RedirectHandler("/debug/pprof", http.StatusSeeOther)
 			http.Handle("/", profileRedirect)
 			err := http.ListenAndServe(listenAddr, nil)
+
 			if err != nil {
 				mainLog.Errorf("Unable to create profiler: %v", err)
 				os.Exit(1)
@@ -68,7 +66,7 @@ func gominerMain() error {
 			mainLog.Errorf("Unable to create cpu profile: %v", err)
 			return err
 		}
-		timer := time.NewTimer(time.Minute * 20) // 20 minutes
+		timer := time.NewTimer(time.Minute * 20)
 		go func() {
 			<-timer.C
 			pprof.WriteHeapProfile(f)

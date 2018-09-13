@@ -3,22 +3,22 @@
 package work
 
 import (
+	"github.com/EXCCoin/exccd/chaincfg/chainhash"
+	"github.com/EXCCoin/exccd/wire"
 	"math/big"
 )
 
 // These are the locations of various data inside Work.Data.
 const (
-	TimestampWord = 2
-	Nonce0Word    = 3
-	Nonce1Word    = 4
-	Nonce2Word    = 5
+	TimestampWord  = 2
+	Nonce1Word     = 4
+	GetworkDataLen = (1 + ((wire.MaxBlockHeaderPayload*8 + 65) / (chainhash.HashBlockSize * 8))) * chainhash.HashBlockSize
 )
 
 // NewWork is the constructor for Work.
-func NewWork(data [192]byte, target *big.Int, jobTime uint32, timeReceived uint32,
-	isGetWork bool) *Work {
+func NewWork(blockHeader wire.BlockHeader, target *big.Int, jobTime uint32, timeReceived uint32, isGetWork bool) *Work {
 	return &Work{
-		Data:         data,
+		BlockHeader:  blockHeader,
 		Target:       target,
 		JobTime:      jobTime,
 		TimeReceived: timeReceived,
@@ -26,10 +26,9 @@ func NewWork(data [192]byte, target *big.Int, jobTime uint32, timeReceived uint3
 	}
 }
 
-// Work holds the data returned from getwork and if needed some stratum related
-// values.
+// Work holds the data returned from getwork and if needed some stratum related values.
 type Work struct {
-	Data         [192]byte
+	BlockHeader  wire.BlockHeader
 	Target       *big.Int
 	JobTime      uint32
 	TimeReceived uint32

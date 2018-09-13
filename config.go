@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/EXCCoin/exccd/exccutil"
 	"github.com/btcsuite/btclog"
 	"github.com/btcsuite/go-flags"
-	"github.com/decred/dcrd/dcrutil"
 )
 
 const (
@@ -28,11 +28,11 @@ const (
 )
 
 var (
-	minerHomeDir          = dcrutil.AppDataDir("gominer", false)
-	dcrdHomeDir           = dcrutil.AppDataDir("dcrd", false)
+	minerHomeDir          = exccutil.AppDataDir("gominer", false)
+	exccdHomeDir          = exccutil.AppDataDir("exccd", false)
 	defaultConfigFile     = filepath.Join(minerHomeDir, defaultConfigFilename)
 	defaultRPCServer      = "localhost"
-	defaultRPCCertFile    = filepath.Join(dcrdHomeDir, "rpc.cert")
+	defaultRPCCertFile    = filepath.Join(exccdHomeDir, "rpc.cert")
 	defaultRPCPortMainNet = "9109"
 	defaultRPCPortTestNet = "19109"
 	defaultRPCPortSimNet  = "19556"

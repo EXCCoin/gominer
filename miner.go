@@ -8,8 +8,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/decred/gominer/stratum"
-	"github.com/decred/gominer/work"
+	"github.com/EXCCoin/gominer/stratum"
+	"github.com/EXCCoin/gominer/work"
 )
 
 type Miner struct {
@@ -76,8 +76,7 @@ func (m *Miner) workSubmitThread() {
 				} else {
 					if accepted {
 						atomic.AddUint64(&m.validShares, 1)
-						minrLog.Debugf("Submitted work successfully: %v",
-							accepted)
+						minrLog.Debugf("Submitted work successfully: %v", accepted)
 					} else {
 						atomic.AddUint64(&m.invalidShares, 1)
 					}
@@ -98,8 +97,7 @@ func (m *Miner) workSubmitThread() {
 					}
 				} else {
 					if submitted {
-						minrLog.Debugf("Submitted work to pool successfully: %v",
-							submitted)
+						minrLog.Debugf("Submitted work to pool successfully: %v", submitted)
 					}
 					m.needsWorkRefresh <- struct{}{}
 				}
@@ -111,30 +109,30 @@ func (m *Miner) workSubmitThread() {
 func (m *Miner) workRefreshThread() {
 	defer m.wg.Done()
 
-	t := time.NewTicker(100 * time.Millisecond)
+	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 
 	for {
 		// Only use that is we are not using a pool.
 		if m.pool == nil {
-			work, err := GetWork()
+			w, err := GetWork()
 			if err != nil {
 				minrLog.Errorf("Error in getwork: %v", err)
 			} else {
 				for _, d := range m.devices {
-					d.SetWork(work)
+					d.SetWork(w)
 				}
 			}
 		} else {
 			m.pool.Lock()
 			if m.pool.PoolWork.NewWork {
-				work, err := GetPoolWork(m.pool)
+				w, err := GetPoolWork(m.pool)
 				m.pool.Unlock()
 				if err != nil {
 					minrLog.Errorf("Error in getpoolwork: %v", err)
 				} else {
 					for _, d := range m.devices {
-						d.SetWork(work)
+						d.SetWork(w)
 					}
 				}
 			} else {
@@ -153,10 +151,16 @@ func (m *Miner) workRefreshThread() {
 func (m *Miner) printStatsThread() {
 	defer m.wg.Done()
 
-	t := time.NewTicker(time.Second * 5)
+	t := time.NewTicker(time.Second * 30)
 	defer t.Stop()
 
 	for {
+		select {
+		case <-m.quit:
+			return
+		case <-t.C:
+		}
+
 		if !cfg.Benchmark {
 			valid, rejected, stale, total, utility := m.Status()
 
@@ -187,13 +191,6 @@ func (m *Miner) printStatsThread() {
 				d.fanControl()
 			}
 		}
-
-		select {
-		case <-m.quit:
-			return
-		case <-t.C:
-		case <-m.needsWorkRefresh:
-		}
 	}
 }
 
@@ -214,9 +211,20 @@ func (m *Miner) Run() {
 
 	if cfg.Benchmark {
 		minrLog.Warn("Running in BENCHMARK mode! No real mining taking place!")
-		work := &work.Work{}
+		w := &work.Work{}
+		w.BlockHeader.FromBytes([]byte{6, 0, 0, 0, 254, 122, 189, 44, 76, 62, 223, 111, 1, 219, 247, 151, 98, 58, 211,
+		148, 251, 40, 66, 90, 218, 43, 222, 56, 253, 180, 154, 189, 95, 114, 246, 4, 231, 184, 29, 242, 25, 197, 18,
+		189, 140, 31, 202, 156, 190, 237, 126, 234, 83, 181, 27, 202, 76, 218, 38, 62, 123, 10, 80, 159, 223, 150, 171,
+		248, 32, 145, 190, 102, 57, 158, 92, 49, 17, 191, 198, 84, 55, 118, 147, 144, 125, 169, 98, 216, 144, 44, 14,
+		159, 205, 124, 81, 225, 50, 42, 211, 148, 1, 0, 2, 192, 167, 171, 59, 58, 5, 0, 0, 0, 232, 17, 0, 0, 22, 238,
+		23, 32, 122, 215, 57, 3, 2, 0, 0, 0, 20, 77, 0, 0, 74, 19, 0, 0, 16, 200, 135, 91, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 8, 192})
 		for _, d := range m.devices {
-			d.SetWork(work)
+			d.SetWork(w)
 		}
 	} else {
 		m.wg.Add(1)
