@@ -5,4 +5,4 @@ copy .\eqcuda1445\x64\Release\eqcuda1445.lib .\eqcuda1445.lib
 copy .\eqcuda1445\x64\Release\eqcuda1445.pdb .\eqcuda1445.pdb
 
 dep ensure
-go build
+go build -ldflags="-extldflags=-static -s -w"
