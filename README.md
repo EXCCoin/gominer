@@ -1,7 +1,6 @@
 
 # gominer
-gominer is an application for performing Proof-of-Work (PoW) mining on the
-Exchange Coin network. It supports solo and stratum/pool mining using CUDA.
+gominer is an application for performing Proof-of-Work (PoW) mining on the Exchange Coin network. It supports solo and stratum/pool mining using CUDA-capable devices.
 
 ## Downloading
 Linux and Windows 64-bit binaries may be downloaded from [https://github.com/EXCCoin/excc-binaries/releases/latest](https://github.com/EXCCoin/excc-binaries/releases/latest)
@@ -64,8 +63,8 @@ $ curl http://localhost:3333/
   * Make sure you've got properly set `GOROOT` and `GOPATH` environment variables
   * Make sure you've got `$GOPATH\bin` in your `PATH`
 - Install [dep](https://github.com/golang/dep): `go get -u github.com/golang/dep/cmd/dep`
-- Install Nvidia drivers >= v399.07
-- Install CUDA >= v9.2 from [here](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64) (you can follow [this](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) instruction)
+- Install Nvidia drivers v396
+- Install CUDA v9.2 from [here](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64) (you can follow [this](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html) instruction)
   * Add those lines to your `.bashrc` file:
 	```
 	export CUDA_HOME=/usr/local/cuda-9.2
@@ -105,6 +104,6 @@ cd $GOPATH/src/github.com/EXCCoin/gominer
 #### Instructions
 ```
 go get github.com/EXCCoin/gominer
-cd $GOPATH/src/github.com/EXCCoin/gominer
+cd %GOPATH%/src/github.com/EXCCoin/gominer
 build.bat
 ```
