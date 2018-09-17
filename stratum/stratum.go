@@ -998,11 +998,12 @@ func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	// the timestamp of the latest pool work timestamp, work gets
 	// rejected from the current implementation.
 	timestampStr := fmt.Sprintf("%08x", latestWorkTs)
-	nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
 	xnonceStr := hex.EncodeToString(data[144:156])
+	solutionStr := hex.EncodeToString(data[180:280])
+	//nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
 
 	sub.Params = []string{s.cfg.User, s.PoolWork.JobID, xnonceStr, timestampStr,
-		nonceStr}
+		solutionStr}
 
 	return sub, nil
 }
