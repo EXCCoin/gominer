@@ -513,10 +513,14 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 	if err != nil {
 		method = ""
 	}
-	err = json.Unmarshal(objmap["id"], &id)
-	if err != nil {
-		return nil, err
+
+	if _, ok := objmap["id"]; ok {
+		err = json.Unmarshal(objmap["id"], &id)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	log.Trace("Received: method: ", method, " id: ", id)
 	if id == s.authID {
 		var (
