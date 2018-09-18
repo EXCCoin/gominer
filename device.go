@@ -407,7 +407,7 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 		if hashNumBig.Cmp(d.work.Target) > 0 {
 			minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)", d.index, hashNumBig, d.work.Target.Bytes())
 		} else {
-			minrLog.Infof("DEV #%d Found hash with work below target! %v (height: %d) (yay)", d.index, hashNum, d.work.BlockHeader.Height)
+			minrLog.Infof("DEV #%d Found hash %s with work below target! %v (height: %d) (yay)", d.index, hashNumBig.String(), hashNum, d.work.BlockHeader.Height)
 			d.validShares++
 			data := make([]byte, 0, work.GetworkDataLen)
 			buf := bytes.NewBuffer(data)

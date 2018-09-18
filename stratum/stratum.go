@@ -5,7 +5,6 @@ package stratum
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -838,21 +837,11 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 // PrepWork converts the stratum notify to getwork style data for mining.
 func (s *Stratum) PrepWork() error {
 	// Build final extranonce, which is basically the pool user and worker ID.
-	en1, err := hex.DecodeString(s.PoolWork.ExtraNonce1)
+	extraNonce, err := hex.DecodeString(s.PoolWork.ExtraNonce1)
 	if err != nil {
 		log.Error("Error decoding ExtraNonce1.")
 		return err
 	}
-
-	// Work out padding.
-	tmp := []string{"%0", strconv.Itoa(int(s.PoolWork.ExtraNonce2Length) * 2), "x"}
-	fmtString := strings.Join(tmp, "")
-	en2, err := hex.DecodeString(fmt.Sprintf(fmtString, s.PoolWork.ExtraNonce2))
-	if err != nil {
-		log.Error("Error decoding ExtraNonce2.")
-		return err
-	}
-	extraNonce := append(en1[:], en2[:]...)
 
 	// Put coinbase transaction together.
 	cb1, err := hex.DecodeString(s.PoolWork.CB1)
@@ -860,78 +849,36 @@ func (s *Stratum) PrepWork() error {
 		log.Error("Error decoding Coinbase pt 1.")
 		return err
 	}
-	cb2, err := hex.DecodeString(s.PoolWork.CB2)
-	if err != nil {
-		log.Errorf("Error decoding Coinbase pt 2.")
-		return err
-	}
 
-	// Generate current ntime.
-	ntime := time.Now().Unix() + s.PoolWork.NtimeDelta
-
-	log.Tracef("ntime: %x", ntime)
-
-	// Serialize header.
-	bh := wire.BlockHeader{}
 	v, err := util.ReverseToInt(s.PoolWork.Version)
 	if err != nil {
 		return err
 	}
-	bh.Version = v
-
-	nbits, err := hex.DecodeString(s.PoolWork.Nbits)
-	if err != nil {
-		log.Error("Error decoding nbits")
-		return err
-	}
-
-	b, _ := binary.Uvarint(nbits)
-	bh.Bits = uint32(b)
-	t := time.Now().Unix() + s.PoolWork.NtimeDelta
-	bh.Timestamp = time.Unix(t, 0)
-	bh.Nonce = 0
-
-	// Serialized version.
-	blockHeader, err := bh.Bytes()
-	if err != nil {
-		return err
-	}
-
-	data := blockHeader
-	copy(data[31:139], cb1[0:108])
-
-	var workdata [work.GetworkDataLen]byte
-	workPosition := 0
-
 	version := new(bytes.Buffer)
 	err = binary.Write(version, binary.LittleEndian, v)
 	if err != nil {
 		return err
 	}
-	copy(workdata[workPosition:], version.Bytes())
-
-	prevHash := util.RevHash(s.PoolWork.Hash)
-	p, err := hex.DecodeString(prevHash)
+	prevHash, err := hex.DecodeString(s.PoolWork.Hash)
 	if err != nil {
 		log.Error("Error encoding previous hash.")
 		return err
 	}
 
+	var workdata [work.GetworkDataLen]byte
+	workPosition := 0
+	copy(workdata[workPosition:], version.Bytes())
 	workPosition += 4
-	copy(workdata[workPosition:], p)
+	copy(workdata[workPosition:], prevHash)
 	workPosition += 32
 	copy(workdata[workPosition:], cb1[0:108])
-	workPosition += 108
+	workPosition = 144
 	copy(workdata[workPosition:], extraNonce)
 	workPosition = 176
-	copy(workdata[workPosition:], cb2)
+	copy(workdata[workPosition:], cb1[140:])
 
-	var randomBytes = make([]byte, 4)
-	_, err = rand.Read(randomBytes)
-	if err != nil {
-		log.Errorf("Unable to generate random bytes")
-		return err
-	}
+	bh := wire.BlockHeader{}
+	bh.FromBytes(workdata[:])
 
 	givenTs := binary.LittleEndian.Uint32(workdata[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 	atomic.StoreUint32(&s.latestJobTime, givenTs)
@@ -999,11 +946,10 @@ func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	// rejected from the current implementation.
 	timestampStr := fmt.Sprintf("%08x", latestWorkTs)
 	xnonceStr := hex.EncodeToString(data[144:156])
-	solutionStr := hex.EncodeToString(data[180:280])
-	//nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
+	nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
+	solutionStr := hex.EncodeToString(submittedHeader.EquihashSolution[:])
 
-	sub.Params = []string{s.cfg.User, s.PoolWork.JobID, xnonceStr, timestampStr,
-		solutionStr}
+	sub.Params = []string{s.cfg.User, s.PoolWork.JobID, xnonceStr, timestampStr, nonceStr, solutionStr}
 
 	return sub, nil
 }
