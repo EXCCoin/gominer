@@ -394,18 +394,29 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 	hashNumBig := blockchain.HashToBig(&hashNum)
 
 	d.allDiffOneShares++
-
-	if hashNumBig.Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
-		minrLog.Debugf("DEV #%d Found hash %s above minimum target %s",
-			d.index, hashNumBig.String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
-		d.invalidShares++
-		return
-	}
+	//
+	//if hashNumBig.Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
+	//	minrLog.Debugf("DEV #%d Found hash %s above minimum target %s",
+	//		d.index, hashNumBig.String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
+	//	d.invalidShares++
+	//	return
+	//}
 
 	if !cfg.Benchmark {
 		// Assess versus the pool or daemon target.
-		if hashNumBig.Cmp(d.work.Target) > 0 {
-			minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)", d.index, hashNumBig, d.work.Target.Bytes())
+		if hashNumBig.Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
+			minrLog.Debugf("DEV #%d Hash %s bigger than target %s (boo)", d.index, hashNumBig, blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
+			d.invalidShares++
+			data := make([]byte, 0, work.GetworkDataLen)
+			buf := bytes.NewBuffer(data)
+			err := d.work.BlockHeader.Serialize(buf)
+			if err != nil {
+				errStr := fmt.Sprintf("Failed to serialize data: %v", err)
+				minrLog.Errorf("Error submitting work: %v", errStr)
+			} else {
+				data = data[:work.GetworkDataLen]
+				d.workDone <- data
+			}
 		} else {
 			minrLog.Infof("DEV #%d Found hash %s with work below target! %v (height: %d) (yay)", d.index, hashNumBig.String(), hashNum, d.work.BlockHeader.Height)
 			d.validShares++
