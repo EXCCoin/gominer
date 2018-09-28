@@ -115,6 +115,12 @@ type StratErr struct {
 	Result *json.RawMessage `json:"result,omitempty"`
 }
 
+type PoolError struct {
+	Code    uint64 `json:"code"`
+	Message string `json:"message"`
+	Data    string `json:"data,omitempty"`
+}
+
 // Basic reply is a reply type for any of the simple messages.
 type BasicReply struct {
 	ID     interface{} `json:"id"`
@@ -526,7 +532,7 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 			objmap      map[string]json.RawMessage
 			id          uint64
 			result      bool
-			errorHolder []interface{}
+			errorHolder PoolError
 		)
 		err := json.Unmarshal(blob, &objmap)
 		if err != nil {
@@ -550,17 +556,9 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 		}
 		resp.Result = result
 
-		if errorHolder != nil {
-			errN, ok := errorHolder[0].(float64)
-			if !ok {
-				return nil, errJsonType
-			}
-			errS, ok := errorHolder[1].(string)
-			if !ok {
-				return nil, errJsonType
-			}
-			resp.Error.ErrNum = uint64(errN)
-			resp.Error.ErrStr = errS
+		if !result {
+			resp.Error.ErrNum = uint64(errorHolder.Code)
+			resp.Error.ErrStr = errorHolder.Message
 		}
 
 		return resp, nil
@@ -639,7 +637,7 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 			objmap      map[string]json.RawMessage
 			id          uint64
 			result      bool
-			errorHolder []interface{}
+			errorHolder PoolError
 		)
 		err := json.Unmarshal(blob, &objmap)
 		if err != nil {
@@ -663,17 +661,9 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 		}
 		resp.Result = result
 
-		if errorHolder != nil {
-			errN, ok := errorHolder[0].(float64)
-			if !ok {
-				return nil, errJsonType
-			}
-			errS, ok := errorHolder[1].(string)
-			if !ok {
-				return nil, errJsonType
-			}
-			resp.Error.ErrNum = uint64(errN)
-			resp.Error.ErrStr = errS
+		if !result {
+			resp.Error.ErrNum = uint64(errorHolder.Code)
+			resp.Error.ErrStr = errorHolder.Message
 		}
 
 		return resp, nil
