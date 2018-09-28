@@ -395,13 +395,6 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 
 	d.allDiffOneShares++
 
-	if hashNumBig.Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
-		minrLog.Debugf("DEV #%d Found hash %s above minimum target %s",
-			d.index, hashNumBig.String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
-		d.invalidShares++
-		return
-	}
-
 	if !cfg.Benchmark {
 		// Assess versus the pool or daemon target.
 		if hashNumBig.Cmp(d.work.Target) > 0 {
