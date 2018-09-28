@@ -10,5 +10,5 @@ nvcc -arch sm_35 -O3 -std=c++11 -Xptxas -O3 -Xcompiler -O3 --compiler-options '-
 g++ -O3 -march=x86-64 -mtune=generic -fPIC -std=c++11 -Wl,-soname,libeqcuda1445.so -shared -o libeqcuda1445.so obj/eqcuda1445.o obj/solver.o obj/blake.o -lcudart_static -ldl -lrt -lpthread
 
 dep ensure
-go build -ldflags="-s -w"
+go build -ldflags="-s -w" -gcflags="-trimpath=${GOPATH}" -asmflags="-trimpath=${GOPATH}"
 sudo cp libeqcuda1445.so /usr/lib
