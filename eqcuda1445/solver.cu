@@ -44,7 +44,8 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
 
     bool debug_logs = false;
     u64 nthreads = 8192;
-    u64 tpb = 128; // threads per block, roughly square root of nthreads
+    u64 tpb; // threads per block
+    for (tpb = 1; tpb * tpb < nthreads; tpb *= 2); // tpb == roughly square root of nthreads
     u64 range = 1;
 
     if (debug_logs) {
