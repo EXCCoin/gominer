@@ -38,20 +38,14 @@ extern "C" int equihash_verify_c(const char *header, u64 header_len, u32 nonce, 
 }
 
 int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<void(const cproof)> on_solution_found) {
-#define printf                                                                                                         \
-    if (debug_logs)                                                                                                    \
-    printf
-
+	#define printf if (debug_logs) printf
     bool debug_logs = false;
-    u64 nthreads = 8192;
+    const u64 nthreads = 8192;
     u64 tpb; // threads per block
     for (tpb = 1; tpb * tpb < nthreads; tpb *= 2); // tpb == roughly square root of nthreads
     u64 range = 1;
 
-    if (debug_logs) {
-        std::string header_hex = to_hex((const unsigned char *)header, header_len);
-        printf("Looking for wagner-tree on (\"%s\",%ui", header_hex.c_str(), nonce);
-    }
+    printf("Looking for wagner-tree on (\"%s\",%ui", to_hex((const unsigned char *)header, header_len).c_str(), nonce);
 
     if (range > 1)
         printf("-%llu", nonce + range - 1);
@@ -62,6 +56,7 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
     u32 *heap0, *heap1;
     checkCudaErrors(cudaMalloc((void **)&heap0, sizeof(digit0)));
     checkCudaErrors(cudaMalloc((void **)&heap1, sizeof(digit1)));
+
     for (u32 r = 0; r < WK; r++)
         if ((r & 1) == 0)
             eq.hta.trees0[r / 2] = (bucket0 *)(heap0 + r / 2);
@@ -81,12 +76,12 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
 
     proof sols[MAXSOLS];
     u32 sumnsols = 0;
-    for (int r = 0; r < range; r++) {
-        cudaEventRecord(start, NULL);
+    for (u64 r = 0; r < range; r++) {
+		checkCudaErrors(cudaEventRecord(start, NULL));
         eq.setheadernonce((const uint8_t *)header, header_len, nonce);
 
         printf("eq.blake_ctx.buf: ");
-        for (int i = 0; i < sizeof(eq.blake_ctx.buf); i++)
+        for (u64 i = 0; i < sizeof(eq.blake_ctx.buf); i++)
             printf("%c(%d) ", char(eq.blake_ctx.buf[i]), int(eq.blake_ctx.buf[i]));
         printf("\n");
 
@@ -117,14 +112,15 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
         }
 #endif
         digitK<<<nthreads / tpb, tpb>>>(device_eq);
-
+        
+        checkCudaErrors(cudaDeviceSynchronize());
         checkCudaErrors(cudaMemcpy(&eq, device_eq, sizeof(equi), cudaMemcpyDeviceToHost));
         u32 maxsols = min(MAXSOLS, eq.nsols);
         checkCudaErrors(cudaMemcpy(sols, eq.sols, maxsols * sizeof(proof), cudaMemcpyDeviceToHost));
-        cudaEventRecord(stop, NULL);
-        cudaEventSynchronize(stop);
+		checkCudaErrors(cudaEventRecord(stop, NULL));
+		checkCudaErrors(cudaEventSynchronize(stop));
         float duration;
-        cudaEventElapsedTime(&duration, start, stop);
+		checkCudaErrors(cudaEventElapsedTime(&duration, start, stop));
         printf("%d rounds completed in %.3f seconds.\n", WK, duration / 1000.0f);
 
         u32 s, nsols, ndupes;
@@ -147,6 +143,8 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
     checkCudaErrors(cudaFree(eq.sols));
     checkCudaErrors(cudaFree(eq.hta.trees0[0]));
     checkCudaErrors(cudaFree(eq.hta.trees1[0]));
+	checkCudaErrors(cudaEventDestroy(start));
+	checkCudaErrors(cudaEventDestroy(stop));
 
     printf("%d total solutions\n", sumnsols);
 
