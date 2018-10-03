@@ -38,7 +38,7 @@ extern "C" int equihash_verify_c(const char *header, u64 header_len, u32 nonce, 
 }
 
 int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<void(const cproof)> on_solution_found) {
-	#define printf if (debug_logs) printf
+    #define printf if (debug_logs) printf
     bool debug_logs = false;
     const u64 nthreads = 8192;
     u64 tpb; // threads per block
@@ -77,7 +77,7 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
     proof sols[MAXSOLS];
     u32 sumnsols = 0;
     for (u64 r = 0; r < range; r++) {
-		checkCudaErrors(cudaEventRecord(start, NULL));
+        checkCudaErrors(cudaEventRecord(start, NULL));
         eq.setheadernonce((const uint8_t *)header, header_len, nonce);
 
         printf("eq.blake_ctx.buf: ");
@@ -117,10 +117,10 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
         checkCudaErrors(cudaMemcpy(&eq, device_eq, sizeof(equi), cudaMemcpyDeviceToHost));
         u32 maxsols = min(MAXSOLS, eq.nsols);
         checkCudaErrors(cudaMemcpy(sols, eq.sols, maxsols * sizeof(proof), cudaMemcpyDeviceToHost));
-		checkCudaErrors(cudaEventRecord(stop, NULL));
-		checkCudaErrors(cudaEventSynchronize(stop));
+        checkCudaErrors(cudaEventRecord(stop, NULL));
+        checkCudaErrors(cudaEventSynchronize(stop));
         float duration;
-		checkCudaErrors(cudaEventElapsedTime(&duration, start, stop));
+        checkCudaErrors(cudaEventElapsedTime(&duration, start, stop));
         printf("%d rounds completed in %.3f seconds.\n", WK, duration / 1000.0f);
 
         u32 s, nsols, ndupes;
@@ -143,8 +143,8 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
     checkCudaErrors(cudaFree(eq.sols));
     checkCudaErrors(cudaFree(eq.hta.trees0[0]));
     checkCudaErrors(cudaFree(eq.hta.trees1[0]));
-	checkCudaErrors(cudaEventDestroy(start));
-	checkCudaErrors(cudaEventDestroy(stop));
+    checkCudaErrors(cudaEventDestroy(start));
+    checkCudaErrors(cudaEventDestroy(stop));
 
     printf("%d total solutions\n", sumnsols);
 
