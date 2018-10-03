@@ -40,3 +40,4 @@ obj/
 *.dll
 *.lib
 *.pdb
+.*
