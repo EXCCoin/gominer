@@ -38,7 +38,8 @@ extern "C" int equihash_verify_c(const char *header, u64 header_len, u32 nonce, 
 }
 
 int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<void(const cproof)> on_solution_found) {
-    #define printf if (debug_logs) printf
+#define printf if (debug_logs) printf
+    checkCudaErrors(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
     bool debug_logs = false;
     const u64 nthreads = 8192;
     u64 tpb; // threads per block
@@ -108,12 +109,12 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
 #else
         for (u32 r = 1; r < WK; r++) {
             r & 1 ? digitO<<<nthreads / tpb, tpb>>>(device_eq, r) : digitE<<<nthreads / tpb, tpb>>>(device_eq, r);
+            checkCudaErrors(cudaDeviceSynchronize());
             eq.showbsizes(r);
         }
 #endif
         digitK<<<nthreads / tpb, tpb>>>(device_eq);
         
-        checkCudaErrors(cudaDeviceSynchronize());
         checkCudaErrors(cudaMemcpy(&eq, device_eq, sizeof(equi), cudaMemcpyDeviceToHost));
         u32 maxsols = min(MAXSOLS, eq.nsols);
         checkCudaErrors(cudaMemcpy(sols, eq.sols, maxsols * sizeof(proof), cudaMemcpyDeviceToHost));
