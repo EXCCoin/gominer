@@ -99,7 +99,7 @@ type Device struct {
 
 	work     work.Work
 	newWork  chan *work.Work
-	workDone chan []byte
+	workDone chan WorkResult
 	hasWork  bool
 
 	started          uint32
@@ -409,8 +409,12 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 				errStr := fmt.Sprintf("Failed to serialize data: %v", err)
 				minrLog.Errorf("Error submitting work: %v", errStr)
 			} else {
-				data = data[:work.GetworkDataLen]
-				d.workDone <- data
+				result := WorkResult{
+					data:  data[:work.GetworkDataLen],
+					jobID: d.work.JobID,
+				}
+
+				d.workDone <- result
 			}
 		}
 	}
@@ -501,7 +505,7 @@ func ListDevices() {
 	}
 }
 
-func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan []byte) (*Device, error) {
+func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkResult) (*Device, error) {
 	d := &Device{
 		index:       index,
 		cuDeviceID:  deviceID,

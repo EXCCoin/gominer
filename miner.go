@@ -12,6 +12,11 @@ import (
 	"github.com/EXCCoin/gominer/work"
 )
 
+type WorkResult struct {
+	data  []byte
+	jobID string
+}
+
 type Miner struct {
 	// The following variables must only be used atomically.
 	validShares   uint64
@@ -20,7 +25,7 @@ type Miner struct {
 
 	started          uint32
 	devices          []*Device
-	workDone         chan []byte
+	workDone         chan WorkResult
 	quit             chan struct{}
 	needsWorkRefresh chan struct{}
 	wg               sync.WaitGroup
@@ -29,7 +34,7 @@ type Miner struct {
 
 func NewMiner() (*Miner, error) {
 	m := &Miner{
-		workDone:         make(chan []byte, 10),
+		workDone:         make(chan WorkResult, 10),
 		quit:             make(chan struct{}),
 		needsWorkRefresh: make(chan struct{}),
 	}
@@ -66,10 +71,10 @@ func (m *Miner) workSubmitThread() {
 		select {
 		case <-m.quit:
 			return
-		case data := <-m.workDone:
+		case workResult := <-m.workDone:
 			// Only use that is we are not using a pool.
 			if m.pool == nil {
-				accepted, err := GetWorkSubmit(data)
+				accepted, err := GetWorkSubmit(workResult.data)
 				if err != nil {
 					atomic.AddUint64(&m.invalidShares, 1)
 					minrLog.Errorf("Error submitting work: %v", err)
@@ -84,7 +89,7 @@ func (m *Miner) workSubmitThread() {
 					m.needsWorkRefresh <- struct{}{}
 				}
 			} else {
-				submitted, err := GetPoolWorkSubmit(data, m.pool)
+				submitted, err := GetPoolWorkSubmit(workResult.data, m.pool, workResult.jobID)
 				if err != nil {
 					switch err {
 					case stratum.ErrStratumStaleWork:

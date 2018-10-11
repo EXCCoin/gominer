@@ -886,14 +886,14 @@ func (s *Stratum) PrepWork() error {
 		return nil
 	}
 
-	w := work.NewWork(bh, s.Target, givenTs, uint32(time.Now().Unix()), false)
+	w := work.NewWork(bh, s.Target, givenTs, uint32(time.Now().Unix()), false, s.PoolWork.JobID)
 	s.PoolWork.Work = w
 
 	return nil
 }
 
 // PrepSubmit formats a mining.sumbit message from the solved work.
-func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
+func (s *Stratum) PrepSubmit(data []byte, jobID string) (Submit, error) {
 	log.Debugf("Stratum got valid work to submit %x", data)
 
 	sub := Submit{}
@@ -939,7 +939,7 @@ func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
 	solutionStr := hex.EncodeToString(submittedHeader.EquihashSolution[:])
 
-	sub.Params = []string{s.cfg.User, s.PoolWork.JobID, xnonceStr, timestampStr, nonceStr, solutionStr}
+	sub.Params = []string{s.cfg.User, jobID, xnonceStr, timestampStr, nonceStr, solutionStr}
 
 	return sub, nil
 }

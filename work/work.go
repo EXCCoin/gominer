@@ -16,13 +16,14 @@ const (
 )
 
 // NewWork is the constructor for Work.
-func NewWork(blockHeader wire.BlockHeader, target *big.Int, jobTime uint32, timeReceived uint32, isGetWork bool) *Work {
+func NewWork(blockHeader wire.BlockHeader, target *big.Int, jobTime uint32, timeReceived uint32, isGetWork bool, jobID string) *Work {
 	return &Work{
 		BlockHeader:  blockHeader,
 		Target:       target,
 		JobTime:      jobTime,
 		TimeReceived: timeReceived,
 		IsGetWork:    isGetWork,
+		JobID:        jobID,
 	}
 }
 
@@ -33,4 +34,5 @@ type Work struct {
 	JobTime      uint32
 	TimeReceived uint32
 	IsGetWork    bool
+	JobID        string
 }
