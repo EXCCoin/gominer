@@ -833,13 +833,18 @@ func (s *Stratum) PrepWork() error {
 		return err
 	}
 
-	// Put coinbase transaction together.
 	cb1, err := hex.DecodeString(s.PoolWork.CB1)
 	if err != nil {
 		log.Error("Error decoding Coinbase pt 1.")
 		return err
 	}
 
+	cb2, err := hex.DecodeString(s.PoolWork.CB2)
+	if err != nil {
+		log.Error("Error decoding Coinbase pt 2.")
+		return err
+	}
+	
 	v, err := util.ReverseToInt(s.PoolWork.Version)
 	if err != nil {
 		return err
@@ -865,7 +870,7 @@ func (s *Stratum) PrepWork() error {
 	workPosition = 144
 	copy(workdata[workPosition:], extraNonce)
 	workPosition = 176
-	copy(workdata[workPosition:], cb1[140:])
+	copy(workdata[workPosition:], cb2[:])
 
 	bh := wire.BlockHeader{}
 	bh.FromBytes(workdata[:])
