@@ -606,17 +606,13 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 			}
 			resp.SubscribeID = innerMsg[1]
 		} else {
-			var innerMsg [][]string
-			err = json.Unmarshal(resJS[0], &innerMsg)
-			if err != nil {
-				return nil, err
-			}
-
+			var innerMsg = resi[0].([]interface{})
 			for i := 0; i < len(innerMsg); i++ {
-				if innerMsg[i][0] == "mining.notify" {
-					resp.SubscribeID = innerMsg[i][1]
+				msg := innerMsg[i].([]interface{})
+				if msg[0] == "mining.notify" {
+					resp.SubscribeID = msg[1].(string)
 				}
-				if innerMsg[i][0] == "mining.set_difficulty" {
+				if msg[0] == "mining.set_difficulty" {
 					// Not all pools correctly put something
 					// in here so we will ignore it (we
 					// already have the default value of 1
