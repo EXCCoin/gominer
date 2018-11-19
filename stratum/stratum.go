@@ -840,7 +840,7 @@ func (s *Stratum) PrepWork() error {
 		log.Error("Error decoding Coinbase pt 2.")
 		return err
 	}
-	
+
 	v, err := util.ReverseToInt(s.PoolWork.Version)
 	if err != nil {
 		return err
