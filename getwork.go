@@ -191,7 +191,7 @@ func GetWork() (*work.Work, error) {
 
 	blockHeader := wire.BlockHeader{}
 	blockHeader.FromBytes(data[:])
-	w := work.NewWork(blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true)
+	w := work.NewWork(blockHeader, bigTarget, givenTs, uint32(time.Now().Unix()), true, "")
 	w.Target = bigTarget
 
 	return w, nil
@@ -285,10 +285,10 @@ func GetWorkSubmit(data []byte) (bool, error) {
 }
 
 // GetPoolWorkSubmit sends the result to the stratum enabled pool
-func GetPoolWorkSubmit(data []byte, pool *stratum.Stratum) (bool, error) {
+func GetPoolWorkSubmit(data []byte, pool *stratum.Stratum, jobID string) (bool, error) {
 	pool.Lock()
 	defer pool.Unlock()
-	sub, err := pool.PrepSubmit(data)
+	sub, err := pool.PrepSubmit(data, jobID)
 	if err != nil {
 		return false, err
 	}

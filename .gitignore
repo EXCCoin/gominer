@@ -31,14 +31,13 @@ gominer
 
 vendor/
 .vendor-new/
-
+_vendor*/*
 
 \.idea/
 \.vs/
 eqcuda1445/x64/
 obj/
 *.dll
-
 *.lib
-
 *.pdb
+.*

@@ -12,6 +12,11 @@ import (
 	"github.com/EXCCoin/gominer/work"
 )
 
+type WorkResult struct {
+	data  []byte
+	jobID string
+}
+
 type Miner struct {
 	// The following variables must only be used atomically.
 	validShares   uint64
@@ -20,7 +25,7 @@ type Miner struct {
 
 	started          uint32
 	devices          []*Device
-	workDone         chan []byte
+	workDone         chan WorkResult
 	quit             chan struct{}
 	needsWorkRefresh chan struct{}
 	wg               sync.WaitGroup
@@ -29,7 +34,7 @@ type Miner struct {
 
 func NewMiner() (*Miner, error) {
 	m := &Miner{
-		workDone:         make(chan []byte, 10),
+		workDone:         make(chan WorkResult, 10),
 		quit:             make(chan struct{}),
 		needsWorkRefresh: make(chan struct{}),
 	}
@@ -66,10 +71,10 @@ func (m *Miner) workSubmitThread() {
 		select {
 		case <-m.quit:
 			return
-		case data := <-m.workDone:
+		case workResult := <-m.workDone:
 			// Only use that is we are not using a pool.
 			if m.pool == nil {
-				accepted, err := GetWorkSubmit(data)
+				accepted, err := GetWorkSubmit(workResult.data)
 				if err != nil {
 					atomic.AddUint64(&m.invalidShares, 1)
 					minrLog.Errorf("Error submitting work: %v", err)
@@ -84,7 +89,7 @@ func (m *Miner) workSubmitThread() {
 					m.needsWorkRefresh <- struct{}{}
 				}
 			} else {
-				submitted, err := GetPoolWorkSubmit(data, m.pool)
+				submitted, err := GetPoolWorkSubmit(workResult.data, m.pool, workResult.jobID)
 				if err != nil {
 					switch err {
 					case stratum.ErrStratumStaleWork:
@@ -213,16 +218,16 @@ func (m *Miner) Run() {
 		minrLog.Warn("Running in BENCHMARK mode! No real mining taking place!")
 		w := &work.Work{}
 		w.BlockHeader.FromBytes([]byte{6, 0, 0, 0, 254, 122, 189, 44, 76, 62, 223, 111, 1, 219, 247, 151, 98, 58, 211,
-		148, 251, 40, 66, 90, 218, 43, 222, 56, 253, 180, 154, 189, 95, 114, 246, 4, 231, 184, 29, 242, 25, 197, 18,
-		189, 140, 31, 202, 156, 190, 237, 126, 234, 83, 181, 27, 202, 76, 218, 38, 62, 123, 10, 80, 159, 223, 150, 171,
-		248, 32, 145, 190, 102, 57, 158, 92, 49, 17, 191, 198, 84, 55, 118, 147, 144, 125, 169, 98, 216, 144, 44, 14,
-		159, 205, 124, 81, 225, 50, 42, 211, 148, 1, 0, 2, 192, 167, 171, 59, 58, 5, 0, 0, 0, 232, 17, 0, 0, 22, 238,
-		23, 32, 122, 215, 57, 3, 2, 0, 0, 0, 20, 77, 0, 0, 74, 19, 0, 0, 16, 200, 135, 91, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 8, 192})
+			148, 251, 40, 66, 90, 218, 43, 222, 56, 253, 180, 154, 189, 95, 114, 246, 4, 231, 184, 29, 242, 25, 197, 18,
+			189, 140, 31, 202, 156, 190, 237, 126, 234, 83, 181, 27, 202, 76, 218, 38, 62, 123, 10, 80, 159, 223, 150, 171,
+			248, 32, 145, 190, 102, 57, 158, 92, 49, 17, 191, 198, 84, 55, 118, 147, 144, 125, 169, 98, 216, 144, 44, 14,
+			159, 205, 124, 81, 225, 50, 42, 211, 148, 1, 0, 2, 192, 167, 171, 59, 58, 5, 0, 0, 0, 232, 17, 0, 0, 22, 238,
+			23, 32, 122, 215, 57, 3, 2, 0, 0, 0, 20, 77, 0, 0, 74, 19, 0, 0, 16, 200, 135, 91, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+			0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 8, 192})
 		for _, d := range m.devices {
 			d.SetWork(w)
 		}

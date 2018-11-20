@@ -99,7 +99,7 @@ type Device struct {
 
 	work     work.Work
 	newWork  chan *work.Work
-	workDone chan []byte
+	workDone chan WorkResult
 	hasWork  bool
 
 	started          uint32
@@ -395,19 +395,12 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 
 	d.allDiffOneShares++
 
-	if hashNumBig.Cmp(blockchain.CompactToBig(d.work.BlockHeader.Bits)) > 0 {
-		minrLog.Debugf("DEV #%d Found hash %s above minimum target %s",
-			d.index, hashNumBig.String(), blockchain.CompactToBig(d.work.BlockHeader.Bits).String())
-		d.invalidShares++
-		return
-	}
-
 	if !cfg.Benchmark {
 		// Assess versus the pool or daemon target.
 		if hashNumBig.Cmp(d.work.Target) > 0 {
 			minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)", d.index, hashNumBig, d.work.Target.Bytes())
 		} else {
-			minrLog.Infof("DEV #%d Found hash with work below target! %v (height: %d) (yay)", d.index, hashNum, d.work.BlockHeader.Height)
+			minrLog.Infof("DEV #%d Found hash %s with work below target! %v (height: %d) (yay)", d.index, hashNumBig.String(), hashNum, d.work.BlockHeader.Height)
 			d.validShares++
 			data := make([]byte, 0, work.GetworkDataLen)
 			buf := bytes.NewBuffer(data)
@@ -416,8 +409,12 @@ func (d *Device) foundCandidate(ts uint32, solution []byte) {
 				errStr := fmt.Sprintf("Failed to serialize data: %v", err)
 				minrLog.Errorf("Error submitting work: %v", errStr)
 			} else {
-				data = data[:work.GetworkDataLen]
-				d.workDone <- data
+				result := WorkResult{
+					data:  data[:work.GetworkDataLen],
+					jobID: d.work.JobID,
+				}
+
+				d.workDone <- result
 			}
 		}
 	}
@@ -508,7 +505,7 @@ func ListDevices() {
 	}
 }
 
-func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan []byte) (*Device, error) {
+func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkResult) (*Device, error) {
 	d := &Device{
 		index:       index,
 		cuDeviceID:  deviceID,

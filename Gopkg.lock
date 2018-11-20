@@ -3,15 +3,15 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:0af691762125fa5465f5a671280fa3883efc0e8b40d85821f9cd97ed39a23ae7"
+  digest = "1:4b21159f9c88025d66c6b518c165e6c3b2dbaf908af84501021f0f36d1865c85"
   name = "github.com/EXCCoin/base58"
   packages = ["."]
-  pruneopts = ""
+  pruneopts = "UT"
   revision = "e1a805ee5d9f5e64352b9b509d18413991cceffb"
 
 [[projects]]
   branch = "master"
-  digest = "1:2423e7d4c0c0c47e8c07b17d617014a623451e05974ac0792431e06014b3191c"
+  digest = "1:872dc2c7b56535428625e2456a02fa8710e1ed8f80a07d3000fb150702d7d90f"
   name = "github.com/EXCCoin/exccd"
   packages = [
     "blockchain",
@@ -34,63 +34,75 @@
     "txscript",
     "wire",
   ]
-  pruneopts = ""
-  revision = "e16039f265b1ef082eab8bb7894bc486da1b8ce4"
+  pruneopts = "UT"
+  revision = "e377db154d35b95210ed287fb4720be3c87cb43b"
+
+[[projects]]
+  branch = "master"
+  digest = "1:47ea4fbe2ab4aeb9808502c51e657041c2e49b36b83fc1c1a349135cdf16342f"
+  name = "github.com/agl/ed25519"
+  packages = [
+    ".",
+    "edwards25519",
+  ]
+  pruneopts = "UT"
+  revision = "5312a61534124124185d41f09206b9fef1d88403"
 
 [[projects]]
   branch = "master"
   digest = "1:30d4a548e09bca4a0c77317c58e7407e2a65c15325e944f9c08a7b7992f8a59e"
   name = "github.com/btcsuite/btclog"
   packages = ["."]
-  pruneopts = ""
+  pruneopts = "UT"
   revision = "84c8d2346e9fc8c7b947e243b9c24e6df9fd206a"
 
 [[projects]]
   branch = "master"
-  digest = "1:540de3a469b3f3ff65d8380fd315ee758cb27d9c87eb8e42ea956638754e353b"
+  digest = "1:30be39b57348c3ca450d20158944a27393a3946e12dcb01ff1ac657d605c3de9"
   name = "github.com/btcsuite/go-flags"
   packages = ["."]
-  pruneopts = ""
+  pruneopts = "UT"
   revision = "6c288d648c1cc1befcb90cb5511dcacf64ae8e61"
 
 [[projects]]
   branch = "master"
-  digest = "1:422f38d57f1bc0fdc34f26d0f1026869a3710400b09b5478c9288efa13573cfa"
+  digest = "1:1e6b2f7aa98b082c30a1303c29a702c369b2ec6d86b74a599bc8bbe2333db299"
   name = "github.com/btcsuite/go-socks"
   packages = ["socks"]
-  pruneopts = ""
+  pruneopts = "UT"
   revision = "4720035b7bfd2a9bb130b1c184f8bbe41b6f0d0f"
 
 [[projects]]
-  branch = "master"
-  digest = "1:74380c03fb4e083b171eefb7cf87f44ffbf9657be2e12b2ff10bea9abede322f"
+  digest = "1:ffe9824d294da03b391f44e1ae8281281b4afc1bdaa9588c9097785e3af10cec"
   name = "github.com/davecgh/go-spew"
   packages = ["spew"]
-  pruneopts = ""
-  revision = "a476722483882dd40b8111f0eb64e1d7f43f56e4"
+  pruneopts = "UT"
+  revision = "8991bc29aa16c548c550c7ff78260e27b9ab7c73"
+  version = "v1.1.1"
 
 [[projects]]
-  digest = "1:e30574e4bf5450239ddcd3dc65258f40ef205023001bd56302cb2ea403f8db68"
+  digest = "1:4b6a85c651ea3faa6dfb4e6de5249b602226270b9eb3dfb8f49ec91fa3ef08ff"
   name = "github.com/jrick/logrotate"
   packages = ["rotator"]
-  pruneopts = ""
-  revision = "4ed05ed86ef17d10ff99cce77481e0fcf6f2c7b0"
+  pruneopts = "UT"
+  revision = "a93b200c26cbae3bb09dd0dc2c7c7fe1468a034a"
+  version = "v1.0.0"
 
 [[projects]]
   branch = "master"
-  digest = "1:e70a3aab7826271fc9e6af0ce5505b2a54375c378b54f815dd88578ea87671b7"
+  digest = "1:f734c43ec01de1063c0e281153c85c1a1897614aca08bd68477b7eaa8569a7fa"
   name = "github.com/mattn/go-pointer"
   packages = ["."]
-  pruneopts = ""
-  revision = "1d30dc4b6f28271a3bd126071d4d0363e618415b"
+  pruneopts = "UT"
+  revision = "49522c3f37914a12a6813caf41f4a9e84d39ca0a"
 
 [[projects]]
   branch = "master"
-  digest = "1:d2438f1c85d855408197edcbac2ba137513738ccefbd12396b0af99d5449880b"
+  digest = "1:b69153653dbbbd9b2be2be289dfb94014284c00bb92e73b800f8f8c239c1ca80"
   name = "golang.org/x/crypto"
   packages = ["ripemd160"]
-  pruneopts = ""
-  revision = "9419663f5a44be8b34ca85f08abc5fe1be11f8a3"
+  pruneopts = "UT"
+  revision = "3d3f9f413869b949e48070b5bc593aa22cc2b8f2"
 
 [solve-meta]
   analyzer-name = "dep"

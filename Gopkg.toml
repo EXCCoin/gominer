@@ -1,5 +1,9 @@
 [[constraint]]
   branch = "master"
+  name = "github.com/EXCCoin/exccd"
+
+[[constraint]]
+  branch = "master"
   name = "github.com/btcsuite/btclog"
 
 [[constraint]]
@@ -11,9 +15,17 @@
   name = "github.com/btcsuite/go-socks"
 
 [[constraint]]
-  branch = "master"
   name = "github.com/davecgh/go-spew"
+  version = "1.1.1"
+
+[[constraint]]
+  name = "github.com/jrick/logrotate"
+  version = "1.0.0"
 
 [[constraint]]
   branch = "master"
-  name = "github.com/EXCCoin/exccd"
+  name = "github.com/mattn/go-pointer"
+
+[prune]
+  go-tests = true
+  unused-packages = true

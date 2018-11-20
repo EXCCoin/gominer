@@ -5,7 +5,6 @@ package stratum
 import (
 	"bufio"
 	"bytes"
-	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -114,6 +113,12 @@ type StratErr struct {
 	ErrNum uint64
 	ErrStr string
 	Result *json.RawMessage `json:"result,omitempty"`
+}
+
+type PoolError struct {
+	Code    uint64 `json:"code"`
+	Message string `json:"message"`
+	Data    string `json:"data,omitempty"`
 }
 
 // Basic reply is a reply type for any of the simple messages.
@@ -377,7 +382,7 @@ func (s *Stratum) handleStratumMsg(resp interface{}) {
 		msg := StratumMsg{
 			Method: nResp.Method,
 			ID:     nResp.ID,
-			Params: []string{"decred-gominer/" + s.cfg.Version},
+			Params: []string{"excc-gominer/" + s.cfg.Version},
 		}
 		m, err := json.Marshal(msg)
 		if err != nil {
@@ -471,7 +476,7 @@ func (s *Stratum) Subscribe() error {
 	msg := StratumMsg{
 		Method: "mining.subscribe",
 		ID:     s.ID,
-		Params: []string{"decred-gominer/" + s.cfg.Version},
+		Params: []string{"excc-gominer/" + s.cfg.Version},
 	}
 	s.subID = msg.ID.(uint64)
 	s.ID++
@@ -513,17 +518,21 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 	if err != nil {
 		method = ""
 	}
-	err = json.Unmarshal(objmap["id"], &id)
-	if err != nil {
-		return nil, err
+
+	if _, ok := objmap["id"]; ok {
+		err = json.Unmarshal(objmap["id"], &id)
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	log.Trace("Received: method: ", method, " id: ", id)
 	if id == s.authID {
 		var (
 			objmap      map[string]json.RawMessage
 			id          uint64
 			result      bool
-			errorHolder []interface{}
+			errorHolder PoolError
 		)
 		err := json.Unmarshal(blob, &objmap)
 		if err != nil {
@@ -547,17 +556,9 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 		}
 		resp.Result = result
 
-		if errorHolder != nil {
-			errN, ok := errorHolder[0].(float64)
-			if !ok {
-				return nil, errJsonType
-			}
-			errS, ok := errorHolder[1].(string)
-			if !ok {
-				return nil, errJsonType
-			}
-			resp.Error.ErrNum = uint64(errN)
-			resp.Error.ErrStr = errS
+		if !result {
+			resp.Error.ErrNum = uint64(errorHolder.Code)
+			resp.Error.ErrStr = errorHolder.Message
 		}
 
 		return resp, nil
@@ -605,17 +606,13 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 			}
 			resp.SubscribeID = innerMsg[1]
 		} else {
-			var innerMsg [][]string
-			err = json.Unmarshal(resJS[0], &innerMsg)
-			if err != nil {
-				return nil, err
-			}
-
+			var innerMsg = resi[0].([]interface{})
 			for i := 0; i < len(innerMsg); i++ {
-				if innerMsg[i][0] == "mining.notify" {
-					resp.SubscribeID = innerMsg[i][1]
+				msg := innerMsg[i].([]interface{})
+				if msg[0] == "mining.notify" {
+					resp.SubscribeID = msg[1].(string)
 				}
-				if innerMsg[i][0] == "mining.set_difficulty" {
+				if msg[0] == "mining.set_difficulty" {
 					// Not all pools correctly put something
 					// in here so we will ignore it (we
 					// already have the default value of 1
@@ -636,7 +633,7 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 			objmap      map[string]json.RawMessage
 			id          uint64
 			result      bool
-			errorHolder []interface{}
+			errorHolder PoolError
 		)
 		err := json.Unmarshal(blob, &objmap)
 		if err != nil {
@@ -660,17 +657,9 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 		}
 		resp.Result = result
 
-		if errorHolder != nil {
-			errN, ok := errorHolder[0].(float64)
-			if !ok {
-				return nil, errJsonType
-			}
-			errS, ok := errorHolder[1].(string)
-			if !ok {
-				return nil, errJsonType
-			}
-			resp.Error.ErrNum = uint64(errN)
-			resp.Error.ErrStr = errS
+		if !result {
+			resp.Error.ErrNum = uint64(errorHolder.Code)
+			resp.Error.ErrStr = errorHolder.Message
 		}
 
 		return resp, nil
@@ -834,100 +823,53 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 // PrepWork converts the stratum notify to getwork style data for mining.
 func (s *Stratum) PrepWork() error {
 	// Build final extranonce, which is basically the pool user and worker ID.
-	en1, err := hex.DecodeString(s.PoolWork.ExtraNonce1)
+	extraNonce, err := hex.DecodeString(s.PoolWork.ExtraNonce1)
 	if err != nil {
 		log.Error("Error decoding ExtraNonce1.")
 		return err
 	}
 
-	// Work out padding.
-	tmp := []string{"%0", strconv.Itoa(int(s.PoolWork.ExtraNonce2Length) * 2), "x"}
-	fmtString := strings.Join(tmp, "")
-	en2, err := hex.DecodeString(fmt.Sprintf(fmtString, s.PoolWork.ExtraNonce2))
-	if err != nil {
-		log.Error("Error decoding ExtraNonce2.")
-		return err
-	}
-	extraNonce := append(en1[:], en2[:]...)
-
-	// Put coinbase transaction together.
 	cb1, err := hex.DecodeString(s.PoolWork.CB1)
 	if err != nil {
 		log.Error("Error decoding Coinbase pt 1.")
 		return err
 	}
+
 	cb2, err := hex.DecodeString(s.PoolWork.CB2)
 	if err != nil {
-		log.Errorf("Error decoding Coinbase pt 2.")
+		log.Error("Error decoding Coinbase pt 2.")
 		return err
 	}
 
-	// Generate current ntime.
-	ntime := time.Now().Unix() + s.PoolWork.NtimeDelta
-
-	log.Tracef("ntime: %x", ntime)
-
-	// Serialize header.
-	bh := wire.BlockHeader{}
 	v, err := util.ReverseToInt(s.PoolWork.Version)
 	if err != nil {
 		return err
 	}
-	bh.Version = v
-
-	nbits, err := hex.DecodeString(s.PoolWork.Nbits)
-	if err != nil {
-		log.Error("Error decoding nbits")
-		return err
-	}
-
-	b, _ := binary.Uvarint(nbits)
-	bh.Bits = uint32(b)
-	t := time.Now().Unix() + s.PoolWork.NtimeDelta
-	bh.Timestamp = time.Unix(t, 0)
-	bh.Nonce = 0
-
-	// Serialized version.
-	blockHeader, err := bh.Bytes()
-	if err != nil {
-		return err
-	}
-
-	data := blockHeader
-	copy(data[31:139], cb1[0:108])
-
-	var workdata [work.GetworkDataLen]byte
-	workPosition := 0
-
 	version := new(bytes.Buffer)
 	err = binary.Write(version, binary.LittleEndian, v)
 	if err != nil {
 		return err
 	}
-	copy(workdata[workPosition:], version.Bytes())
-
-	prevHash := util.RevHash(s.PoolWork.Hash)
-	p, err := hex.DecodeString(prevHash)
+	prevHash, err := hex.DecodeString(s.PoolWork.Hash)
 	if err != nil {
 		log.Error("Error encoding previous hash.")
 		return err
 	}
 
+	var workdata [work.GetworkDataLen]byte
+	workPosition := 0
+	copy(workdata[workPosition:], version.Bytes())
 	workPosition += 4
-	copy(workdata[workPosition:], p)
+	copy(workdata[workPosition:], prevHash)
 	workPosition += 32
 	copy(workdata[workPosition:], cb1[0:108])
-	workPosition += 108
+	workPosition = 144
 	copy(workdata[workPosition:], extraNonce)
 	workPosition = 176
-	copy(workdata[workPosition:], cb2)
+	copy(workdata[workPosition:], cb2[:])
 
-	var randomBytes = make([]byte, 4)
-	_, err = rand.Read(randomBytes)
-	if err != nil {
-		log.Errorf("Unable to generate random bytes")
-		return err
-	}
+	bh := wire.BlockHeader{}
+	bh.FromBytes(workdata[:])
 
 	givenTs := binary.LittleEndian.Uint32(workdata[128+4*work.TimestampWord : 132+4*work.TimestampWord])
 	atomic.StoreUint32(&s.latestJobTime, givenTs)
@@ -945,14 +887,14 @@ func (s *Stratum) PrepWork() error {
 		return nil
 	}
 
-	w := work.NewWork(bh, s.Target, givenTs, uint32(time.Now().Unix()), false)
+	w := work.NewWork(bh, s.Target, givenTs, uint32(time.Now().Unix()), false, s.PoolWork.JobID)
 	s.PoolWork.Work = w
 
 	return nil
 }
 
 // PrepSubmit formats a mining.sumbit message from the solved work.
-func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
+func (s *Stratum) PrepSubmit(data []byte, jobID string) (Submit, error) {
 	log.Debugf("Stratum got valid work to submit %x", data)
 
 	sub := Submit{}
@@ -994,11 +936,11 @@ func (s *Stratum) PrepSubmit(data []byte) (Submit, error) {
 	// the timestamp of the latest pool work timestamp, work gets
 	// rejected from the current implementation.
 	timestampStr := fmt.Sprintf("%08x", latestWorkTs)
-	nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
 	xnonceStr := hex.EncodeToString(data[144:156])
+	nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
+	solutionStr := hex.EncodeToString(submittedHeader.EquihashSolution[:])
 
-	sub.Params = []string{s.cfg.User, s.PoolWork.JobID, xnonceStr, timestampStr,
-		nonceStr}
+	sub.Params = []string{s.cfg.User, jobID, xnonceStr, timestampStr, nonceStr, solutionStr}
 
 	return sub, nil
 }
