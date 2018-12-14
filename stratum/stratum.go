@@ -937,7 +937,7 @@ func (s *Stratum) PrepSubmit(data []byte, jobID string) (Submit, error) {
 	// rejected from the current implementation.
 	timestampStr := fmt.Sprintf("%08x", latestWorkTs)
 	xnonceStr := hex.EncodeToString(data[144:156])
-	nonceStr := fmt.Sprintf("%08x", submittedHeader.Nonce)
+	nonceStr := hex.EncodeToString(data[140:144])
 	solutionStr := hex.EncodeToString(submittedHeader.EquihashSolution[:])
 
 	sub.Params = []string{s.cfg.User, jobID, xnonceStr, timestampStr, nonceStr, solutionStr}
