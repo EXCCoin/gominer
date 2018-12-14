@@ -477,13 +477,14 @@ func (d *Device) runDevice() error {
 		// Execute the kernel and follow its execution time.
 		currentTime := time.Now()
 
-		equihashInput, err := d.work.BlockHeader.SerializeAllHeaderBytes()
+		algo := chaincfg.TestNetParams.Algorithm(d.work.BlockHeader.Height)
+		equihashInput, err := d.work.BlockHeader.SerializeEquihashHeaderBytes(algo)
 		if err != nil {
 			continue
 		}
 
 		minrLog.Tracef("EquihashSolveCuda(workId=%d, blockHeight=%d, nonce=%d, extraNonce=%d)", d.currentWorkID, d.work.BlockHeader.Height, d.work.BlockHeader.Nonce, d.extraNonce)
-		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint64_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
+		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint32_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
 
 		elapsedTime := time.Since(currentTime)
 		minrLog.Tracef("GPU #%d: Kernel execution to read time: %v", d.index, elapsedTime)

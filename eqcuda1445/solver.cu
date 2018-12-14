@@ -5,48 +5,48 @@
 #include "eqcuda1445.cuh"
 #include "solver_details.cuh"
 
-verify_code equihash_verify_uncompressed(const char *header, u64 header_len, u32 nonce, const proof indices) {
+verify_code equihash_verify_uncompressed(const char *header, u32 header_len, const proof indices) {
     if (duped(indices))
         return verify_code::POW_DUPLICATE;
 
     blake2b_state ctx;
-    setheader(&ctx, (const uint8_t *)header, header_len, nonce);
+    setperson(&ctx);
+    blake2b_update(&ctx, (uint8_t *)header, header_len);
     uchar hash[WN / 8];
     return verifyrec(&ctx, indices, hash, WK);
 }
 
-verify_code equihash_verify_uncompressed(const std::string &header, u32 nonce, const proof indices) {
-    return equihash_verify_uncompressed(header.c_str(), header.length(), nonce, indices);
+verify_code equihash_verify_uncompressed(const std::string &header, const proof indices) {
+    return equihash_verify_uncompressed(header.c_str(), header.length(), indices);
 }
 
-extern "C" int equihash_verify_uncompressed_c(const char *header, u64 header_len, u32 nonce, const proof indices) {
-    return static_cast<int>(equihash_verify_uncompressed(header, header_len, nonce, indices));
+extern "C" int equihash_verify_uncompressed_c(const char *header, u32 header_len, const proof indices) {
+    return static_cast<int>(equihash_verify_uncompressed(header, header_len, indices));
 }
 
-verify_code equihash_verify(const char *header, u64 header_len, u32 nonce, const cproof indices) {
+verify_code equihash_verify(const char *header, u32 header_len, const cproof indices) {
     proof sol;
     uncompress_solution(indices, sol);
-    return equihash_verify_uncompressed(header, header_len, nonce, sol);
+    return equihash_verify_uncompressed(header, header_len, sol);
 }
 
-verify_code equihash_verify(const std::string &header, u32 nonce, const cproof indices) {
-    return equihash_verify(header.c_str(), header.length(), nonce, indices);
+verify_code equihash_verify(const std::string &header, const cproof indices) {
+    return equihash_verify(header.c_str(), header.length(), indices);
 }
 
-extern "C" int equihash_verify_c(const char *header, u64 header_len, u32 nonce, const cproof indices) {
-    return static_cast<int>(equihash_verify(header, header_len, nonce, indices));
+extern "C" int equihash_verify_c(const char *header, u32 header_len, const cproof indices) {
+    return static_cast<int>(equihash_verify(header, header_len, indices));
 }
 
-int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<void(const cproof)> on_solution_found) {
+int equihash_solve(const char *header, u32 header_len, u32 nonce, std::function<void(const cproof)> on_solution_found) {
 #define printf if (debug_logs) printf
-    checkCudaErrors(cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync));
     bool debug_logs = false;
     const u64 nthreads = 8192;
     u64 tpb; // threads per block
     for (tpb = 1; tpb * tpb < nthreads; tpb *= 2); // tpb == roughly square root of nthreads
-    u64 range = 1;
+    u32 range = 1;
 
-    printf("Looking for wagner-tree on (\"%s\",%ui", to_hex((const unsigned char *)header, header_len).c_str(), nonce);
+    printf("Looking for wagner-tree on (\"%s\",%u", to_hex((const unsigned char *)header, header_len).c_str(), nonce);
 
     if (range > 1)
         printf("-%llu", nonce + range - 1);
@@ -77,9 +77,9 @@ int equihash_solve(const char *header, u64 header_len, u32 nonce, std::function<
 
     proof sols[MAXSOLS];
     u32 sumnsols = 0;
-    for (u64 r = 0; r < range; r++) {
+    for (u32 r = 0; r < range; r++) {
         checkCudaErrors(cudaEventRecord(start, NULL));
-        eq.setheadernonce((const uint8_t *)header, header_len, nonce);
+        eq.setstate((const uint8_t *)header, header_len, nonce);
 
         printf("eq.blake_ctx.buf: ");
         for (u64 i = 0; i < sizeof(eq.blake_ctx.buf); i++)
@@ -157,7 +157,7 @@ int equihash_solve(const std::string &header, u32 nonce, std::function<void(cons
     return equihash_solve(header.c_str(), header.length(), nonce, on_solution_found);
 }
 
-extern "C" int equihash_solve_c(const char *header, u64 header_len, u32 nonce,
+extern "C" int equihash_solve_c(const char *header, u32 header_len, u32 nonce,
                                 void (*on_solution_found)(void *user_data, const cproof solution), void *user_data) {
     return equihash_solve(header, header_len, nonce,
                           [=](const cproof solution) { on_solution_found(user_data, solution); });
