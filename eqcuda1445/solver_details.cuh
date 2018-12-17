@@ -143,23 +143,30 @@ void cuda_init() {
 	checkCudaErrors(cudaSetDeviceFlags(cudaDeviceScheduleYield));
 }
 
-void setheader(blake2b_state *ctx, const uint8_t *input, u64 input_len, u32 nonce) {
+static void setperson(blake2b_state *ctx) {
     blake2b_param P;
     memset(&P, 0, sizeof(blake2b_param));
 
-    P.fanout = 1;
-    P.depth = 1;
+    P.fanout        = 1;
+    P.depth         = 1;
     P.digest_length = (512 / WN) * WN / 8;
-    memcpy(P.personal, BLAKE_PERSONAL, strlen(BLAKE_PERSONAL));
-    *(u32 *)(P.personal + strlen(BLAKE_PERSONAL)) = htole32(WN);
-    *(u32 *)(P.personal + strlen(BLAKE_PERSONAL) + 4) = htole32(WK);
+
+    memcpy(P.personal, "ZcashPoW", 8);
+    *(uint32_t *)(P.personal + 8)  = htole32(WN);
+    *(uint32_t *)(P.personal + 12) = htole32(WK);
 
     blake2b_init_param(ctx, &P);
-    blake2b_update(ctx, input, input_len);
+}
 
-    u32 expandedNonce[8] = {0};
-    expandedNonce[0] = htole32(nonce);
-    blake2b_update(ctx, (uint8_t *)&expandedNonce, sizeof(expandedNonce));
+void setheader(blake2b_state *ctx, const uint8_t *input, u32 input_len, u32 nonce) {
+    uint8_t *localInput = (uint8_t*)malloc(input_len*sizeof(uint8_t));
+    memcpy(localInput, input, input_len*sizeof(uint8_t));
+
+    *((u32 *)&localInput[140]) = nonce;
+
+    blake2b_update(ctx, localInput, input_len);
+
+    free(localInput);
 }
 
 void genhash(const blake2b_state *ctx, u32 idx, uchar *hash) {
@@ -356,7 +363,8 @@ struct equi {
     u32 nsols;
     u32 nthreads;
     equi(const u32 n_threads) { nthreads = n_threads; }
-    void setheadernonce(const uint8_t *input, u64 input_len, u32 nonce) {
+    void setstate(const uint8_t *input, u32 input_len, u32 nonce) {
+        setperson(&blake_ctx);
         setheader(&blake_ctx, input, input_len, nonce);
         nsols = 0;
     }
