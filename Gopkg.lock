@@ -11,7 +11,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:872dc2c7b56535428625e2456a02fa8710e1ed8f80a07d3000fb150702d7d90f"
+  digest = "1:b840cd204632d8e2808c3056ee8180009d7a5477a8dbb35bc039c7c26457ccec"
   name = "github.com/EXCCoin/exccd"
   packages = [
     "blockchain",
@@ -35,7 +35,7 @@
     "wire",
   ]
   pruneopts = "UT"
-  revision = "e377db154d35b95210ed287fb4720be3c87cb43b"
+  revision = "6dd76aa28e6d9c05cfa72d747c3e924fa5511a00"
 
 [[projects]]
   branch = "master"
