@@ -23,14 +23,14 @@ import (
 	"github.com/btcsuite/go-socks/socks"
 	"github.com/davecgh/go-spew/spew"
 
-	"github.com/EXCCoin/exccd/chaincfg"
+	"github.com/EXCCoin/exccd/chaincfg/v3"
 	"github.com/EXCCoin/exccd/wire"
 
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
 )
 
-var chainParams = &chaincfg.MainNetParams
+var chainParams = chaincfg.MainNetParams()
 
 // ErrStratumStaleWork indicates that the work to send to the pool was stale.
 var ErrStratumStaleWork = fmt.Errorf("Stale work, throwing away")

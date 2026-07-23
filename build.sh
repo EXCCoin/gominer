@@ -1,14 +1,56 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null && pwd)"
-cd "${DIR}" > "/dev/null" || exit
+cd "${DIR}"
 
-mkdir -p "obj" || exit
-g++ -O3 -march=x86-64 -mtune=generic -fPIC -std=c++11 -c eqcuda1445/blake/blake2b.cpp -o obj/blake.o                                                                                         && \
-nvcc -arch sm_35 -O3 -std=c++11 -Xptxas -O3 -Xcompiler -O3 --compiler-options '-fPIC -std=c++11' -rdc=true -c -o obj/solver.o eqcuda1445/solver.cu                                           && \
-nvcc -arch sm_35 -O3 -std=c++11 -Xptxas -O3 -Xcompiler -O3 --compiler-options '-fPIC -std=c++11' -dlink -o obj/eqcuda1445.o obj/solver.o                                                     && \
-g++ -O3 -march=x86-64 -mtune=generic -fPIC -std=c++11 -Wl,-soname,libeqcuda1445.so -shared -o libeqcuda1445.so obj/eqcuda1445.o obj/solver.o obj/blake.o -lcudart_static -ldl -lrt -lpthread && \
+# Locate the CUDA toolkit: $CUDA_HOME, nvcc on PATH, or common install dirs.
+if [ -z "${CUDA_HOME:-}" ]; then
+    if command -v nvcc >/dev/null; then
+        CUDA_HOME="$(dirname "$(dirname "$(command -v nvcc)")")"
+    else
+        for d in "$HOME"/cuda-* /usr/local/cuda /opt/cuda; do
+            [ -x "$d/bin/nvcc" ] && CUDA_HOME="$d" && break
+        done
+    fi
+fi
+[ -x "${CUDA_HOME:-}/bin/nvcc" ] || { echo "nvcc not found; set CUDA_HOME" >&2; exit 1; }
+echo "Using CUDA toolkit: ${CUDA_HOME}"
 
-dep ensure                                                                               && \
-go build -ldflags="-s -w" -gcflags="-trimpath=${GOPATH}" -asmflags="-trimpath=${GOPATH}" && \
-sudo cp libeqcuda1445.so /usr/lib                                                        || exit
+# Fat binary: Turing (sm_75) through Blackwell (sm_120), plus PTX for newer
+# GPUs. Pascal/Volta users: build with a CUDA 12.x toolkit and override
+# GENCODE accordingly.
+GENCODE=${GENCODE:-"\
+ -gencode arch=compute_75,code=sm_75 \
+ -gencode arch=compute_80,code=sm_80 \
+ -gencode arch=compute_86,code=sm_86 \
+ -gencode arch=compute_89,code=sm_89 \
+ -gencode arch=compute_90,code=sm_90 \
+ -gencode arch=compute_120,code=sm_120 \
+ -gencode arch=compute_120,code=compute_120"}
+
+mkdir -p obj
+g++ -O3 -march=x86-64 -mtune=generic -fPIC -std=c++17 -c eqcuda1445/blake/blake2b.cpp -o obj/blake.o
+"${CUDA_HOME}/bin/nvcc" ${GENCODE} -O3 -std=c++17 -allow-unsupported-compiler \
+    -Xptxas -O3 -Xcompiler -O3,-fPIC -c eqcuda1445/solver.cu -o obj/solver.o
+ar rcs libeqcuda1445.a obj/solver.o obj/blake.o
+
+# ./build.sh test — solve 20 nonces on the GPU and verify every solution
+# against the CPU verifier.
+if [ "${1:-}" = "test" ]; then
+    g++ -O2 -std=c++17 -I. eqcuda1445/test_verify.cpp libeqcuda1445.a \
+        -o obj/test_verify -L"${CUDA_HOME}/lib64" -lcudart_static -ldl -lrt -lpthread
+    ./obj/test_verify
+fi
+
+# Stamp the solver library hash into the build: identifies the kernel build
+# and, because Go's build cache is content-based, forces a relink whenever
+# the .a changes.
+LIBHASH="$(sha256sum libeqcuda1445.a | cut -c1-12)"
+
+CGO_CFLAGS="-I${CUDA_HOME}/include ${CGO_CFLAGS:-}" \
+CGO_CXXFLAGS="-I${CUDA_HOME}/include ${CGO_CXXFLAGS:-}" \
+CGO_LDFLAGS="-L${DIR} -L${CUDA_HOME}/lib64 ${CGO_LDFLAGS:-}" \
+    go build -trimpath -ldflags="-s -w -X main.appBuild=cuda.${LIBHASH}"
+
+echo "Built ${DIR}/gominer"

@@ -14,10 +14,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/EXCCoin/exccd/exccutil"
+	"github.com/EXCCoin/exccd/chaincfg/v3"
+	"github.com/EXCCoin/exccd/dcrutil/v4"
 	"github.com/btcsuite/btclog"
 	"github.com/btcsuite/go-flags"
 )
+
+// chainParams selects the Equihash header-serialization schedule; the
+// TestNet/SimNet flags override it in loadConfig.
+var chainParams = chaincfg.MainNetParams()
 
 const (
 	defaultConfigFilename = "gominer.conf"
@@ -28,8 +33,8 @@ const (
 )
 
 var (
-	minerHomeDir          = exccutil.AppDataDir("gominer", false)
-	exccdHomeDir          = exccutil.AppDataDir("exccd", false)
+	minerHomeDir          = dcrutil.AppDataDir("gominer", false)
+	exccdHomeDir          = dcrutil.AppDataDir("exccd", false)
 	defaultConfigFile     = filepath.Join(minerHomeDir, defaultConfigFilename)
 	defaultRPCServer      = "localhost"
 	defaultRPCCertFile    = filepath.Join(exccdHomeDir, "rpc.cert")
@@ -87,6 +92,7 @@ type config struct {
 	AutocalibrateInts []int
 	Devices           string `short:"D" long:"devices" description:"Single device ID or a comma separated list of device IDs to use."`
 	DeviceIDs         []int
+	Instances         int    `short:"I" long:"instances" description:"Concurrent solver instances per device (0 = auto-size from free GPU memory, ~2.7GB each)."`
 	Intensity         string `short:"i" long:"intensity" description:"Intensities (the work size is 2^intensity) per device. Single global value or a comma separated list."`
 	IntensityInts     []int
 	TempTarget        string `short:"t" long:"temptarget" description:"Target temperature in Celsius to maintain via automatic fan control. (Requires --experimental flag)"`
@@ -233,10 +239,10 @@ func cleanAndExpandPath(path string) string {
 // line options.
 //
 // The configuration proceeds as follows:
-// 	1) Start with a default config with sane settings
-// 	2) Pre-parse the command line to check for an alternative config file
-// 	3) Load configuration file overwriting defaults with any specified options
-// 	4) Parse CLI options and overwrite/add any specified options
+//  1. Start with a default config with sane settings
+//  2. Pre-parse the command line to check for an alternative config file
+//  3. Load configuration file overwriting defaults with any specified options
+//  4. Parse CLI options and overwrite/add any specified options
 //
 // The above results in btcd functioning properly without any config settings
 // while still allowing the user to override settings with config files and
@@ -322,6 +328,13 @@ func loadConfig() (*config, []string, error) {
 		err := fmt.Errorf(str, "loadConfig")
 		fmt.Fprintln(os.Stderr, err)
 		return nil, nil, err
+	}
+
+	switch {
+	case cfg.TestNet:
+		chainParams = chaincfg.TestNet3Params()
+	case cfg.SimNet:
+		chainParams = chaincfg.SimNetParams()
 	}
 
 	// Check the autocalibrations if the user is setting that.

@@ -5,23 +5,27 @@ package main
 /*
 #cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
 #cgo CFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
-#cgo !windows LDFLAGS: -L. -leqcuda1445
-#cgo windows LDFLAGS: -L. -leqcuda1445
+#cgo LDFLAGS: -L. -leqcuda1445 -lstdc++
 #include "eqcuda1445/eqcuda1445.h"
+
+static int eqSolveGo(EqSolver *s, const void *hdr, uint32_t len, uint32_t nonce, void *ud) __attribute__((unused));
+static int eqSolveGo(EqSolver *s, const void *hdr, uint32_t len, uint32_t nonce, void *ud) {
+	return eq_solve(s, hdr, len, nonce, equihashProxyGominer, ud);
+}
 */
 import "C"
 import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math/big"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/EXCCoin/exccd/blockchain"
-	"github.com/EXCCoin/exccd/chaincfg"
+	standalone "github.com/EXCCoin/exccd/blockchain/standalone/v2"
 	"github.com/EXCCoin/exccd/wire"
 
 	"github.com/EXCCoin/gominer/nvml"
@@ -32,11 +36,15 @@ import (
 	cptr "github.com/mattn/go-pointer"
 )
 
+// solverMemBytes is the approximate device memory one solver instance needs
+// (measured ~650 MB on CUDA 13).
+const solverMemBytes = 700 << 20
+
 //export equihashProxyGominer
 func equihashProxyGominer(userData unsafe.Pointer, solution unsafe.Pointer) C.int {
-	device := cptr.Restore(userData).(*Device)
-	csol := C.GoBytes(solution, C.int(equihashSolutionSize(chaincfg.MainNetParams.N, chaincfg.MainNetParams.K)))
-	device.handleEquihashSolution(csol)
+	w := cptr.Restore(userData).(*eqWorker)
+	csol := C.GoBytes(solution, C.int(wire.EquihashSolutionLen))
+	w.handleSolution(csol)
 	return 0
 }
 
@@ -63,10 +71,20 @@ const (
 
 type Device struct {
 	// The following variables must only be used atomically.
-	fanPercent  uint32
-	temperature uint32
+	fanPercent       uint32
+	temperature      uint32
+	allDiffOneShares uint64
+	validShares      uint64
+	invalidShares    uint64
 
-	sync.Mutex
+	// extraNonce is advanced atomically by the workers; the top byte is the
+	// device ID (supporting up to 255 devices), the low 3 bytes roll over.
+	extraNonce uint32
+
+	sync.Mutex // protects work and hasWork
+	work       work.Work
+	hasWork    bool
+
 	index int
 	cuda  bool
 
@@ -79,35 +97,25 @@ type Device struct {
 	kind                     string
 	tempTarget               uint32
 
-	// Items for CUDA device
-	cuDeviceID     cu.Device
-	cuInSize       int64
-	cuOutputBuffer []float64
+	cuDeviceID cu.Device
+	instances  int
+	workSize   uint32
 
-	workSize uint32
-
-	// extraNonce is the device extraNonce, where the first
-	// byte is the device ID (supporting up to 255 devices)
-	// while the last 3 bytes is the extraNonce value. If
-	// the extraNonce goes through all 0x??FFFFFF values,
-	// it will reset to 0x??000000.
-	extraNonce    uint32
-	currentWorkID uint32
-
-	midstate  [8]uint32
-	lastBlock [16]uint32
-
-	work     work.Work
-	newWork  chan *work.Work
 	workDone chan WorkResult
-	hasWork  bool
+	started  uint32
+	quit     chan struct{}
+}
 
-	started          uint32
-	allDiffOneShares uint64
-	validShares      uint64
-	invalidShares    uint64
-
-	quit chan struct{}
+// eqWorker is one solver instance on a device. Each worker owns its own GPU
+// buffers and remembers the exact header it is solving so that concurrent
+// workers never submit a header they did not solve.
+type eqWorker struct {
+	d         *Device
+	solver    *C.EqSolver
+	header    wire.BlockHeader
+	target    *big.Int
+	jobID     string
+	benchmark bool
 }
 
 func (d *Device) Run() {
@@ -122,7 +130,41 @@ func (d *Device) Stop() {
 }
 
 func (d *Device) SetWork(w *work.Work) {
-	d.newWork <- w
+	d.Lock()
+	d.work = *w
+	d.hasWork = true
+	d.Unlock()
+}
+
+// waitForWork returns a snapshot of the current work, blocking until work is
+// available. ok is false when the device is shutting down.
+func (d *Device) waitForWork() (w work.Work, ok bool) {
+	for {
+		select {
+		case <-d.quit:
+			return work.Work{}, false
+		default:
+		}
+		d.Lock()
+		if d.hasWork {
+			w = d.work
+			d.Unlock()
+			return w, true
+		}
+		d.Unlock()
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func (d *Device) nextExtraNonce() uint32 {
+	for {
+		old := atomic.LoadUint32(&d.extraNonce)
+		next := old
+		util.RolloverExtraNonce(&next)
+		if atomic.CompareAndSwapUint32(&d.extraNonce, old, next) {
+			return next
+		}
+	}
 }
 
 func (d *Device) PrintStats() {
@@ -131,11 +173,9 @@ func (d *Device) PrintStats() {
 		return
 	}
 
-	d.Lock()
-	defer d.Unlock()
-
 	averageHashRate, fanPercent, temperature := d.Status()
-	log := fmt.Sprintf("DEV #%d (%s) (%v) (allDiffOneShares=%d)", d.index, d.deviceName, util.FormatHashRate(averageHashRate), d.allDiffOneShares)
+	log := fmt.Sprintf("DEV #%d (%s) %v (solutions=%d)", d.index, d.deviceName,
+		util.FormatHashRate(averageHashRate), atomic.LoadUint64(&d.allDiffOneShares))
 
 	if fanPercent != 0 {
 		log = fmt.Sprintf("%s (Fan=%v%%)", log, fanPercent)
@@ -150,26 +190,22 @@ func (d *Device) PrintStats() {
 
 // UpdateFanTemp updates a device's statistics
 func (d *Device) UpdateFanTemp() {
-	d.Lock()
-	defer d.Unlock()
 	if d.fanTempActive {
-		// For now amd and nvidia do more or less the same thing
-		// but could be split up later.  Anything else (Intel) just
-		// doesn't do anything.
 		switch d.kind {
 		case DeviceKindADL, DeviceKindAMDGPU, DeviceKindNVML:
 			fanPercent, temperature := deviceStats(d.index)
 			atomic.StoreUint32(&d.fanPercent, fanPercent)
 			atomic.StoreUint32(&d.temperature, temperature)
-			break
 		}
 	}
 }
 
+// Status returns the average solution rate (Sol/s), fan percent, and
+// temperature of the device.
 func (d *Device) Status() (float64, uint32, uint32) {
 	secondsElapsed := uint32(time.Now().Unix()) - d.started
 
-	averageHashRate := float64(d.allDiffOneShares) / float64(secondsElapsed)
+	averageHashRate := float64(atomic.LoadUint64(&d.allDiffOneShares)) / float64(secondsElapsed)
 
 	fanPercent := atomic.LoadUint32(&d.fanPercent)
 	temperature := atomic.LoadUint32(&d.temperature)
@@ -180,41 +216,6 @@ func (d *Device) Status() (float64, uint32, uint32) {
 func (d *Device) Release() {
 	cu.SetDevice(d.cuDeviceID)
 	cu.DeviceReset()
-}
-
-func (d *Device) handleEquihashSolution(solution []byte) {
-	minrLog.Tracef("GPU #%d: Found candidate: %08x, workID %08x, timestamp %08x",
-		d.index, solution, util.Uint32EndiannessSwap(d.currentWorkID), d.lastBlock[work.TimestampWord])
-
-	// Assess the work. If it's below target, it'll be rejected
-	// here. The mining algorithm currently sends this function any
-	// difficulty 1 shares.
-	d.foundCandidate(d.lastBlock[work.TimestampWord], solution)
-}
-
-func (d *Device) updateCurrentWork() {
-	var w *work.Work
-	if d.hasWork {
-		// If we already have work, we just need to check if there's new one without blocking if there's not.
-		select {
-		case w = <-d.newWork:
-		default:
-			return
-		}
-	} else {
-		// If we don't have work, we block until we do. We need to watch for quit events too.
-		select {
-		case w = <-d.newWork:
-		case <-d.quit:
-			return
-		}
-	}
-
-	d.work = *w
-
-	// Bump and set the work ID if the work is new.
-	d.currentWorkID++
-	d.hasWork = true
 }
 
 // This is pretty hacky/proof-of-concepty
@@ -383,118 +384,127 @@ func (d *Device) fanControlSupported(kind string) bool {
 	return false
 }
 
-func (d *Device) foundCandidate(ts uint32, solution []byte) {
-	d.Lock()
-	defer d.Unlock()
+// handleSolution is invoked (via the cgo proxy) for every solution the GPU
+// found for the worker's current header.
+func (w *eqWorker) handleSolution(solution []byte) {
+	if w.benchmark {
+		return
+	}
 
-	// Construct the final block header.
-	copy(d.work.BlockHeader.EquihashSolution[:], solution)
+	d := w.d
+	hdr := w.header // copy; the worker may already be reused for new work
+	copy(hdr.EquihashSolution[:], solution)
 
-	hashNum := d.work.BlockHeader.BlockHash()
-	hashNumBig := blockchain.HashToBig(&hashNum)
+	hashNum := hdr.BlockHash()
+	hashNumBig := standalone.HashToBig(&hashNum)
 
-	d.allDiffOneShares++
+	// Assess versus the pool or daemon target.
+	if hashNumBig.Cmp(w.target) > 0 {
+		minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)", d.index, hashNumBig, w.target.Bytes())
+		return
+	}
 
-	if !cfg.Benchmark {
-		// Assess versus the pool or daemon target.
-		if hashNumBig.Cmp(d.work.Target) > 0 {
-			minrLog.Debugf("DEV #%d Hash %s bigger than target %032x (boo)", d.index, hashNumBig, d.work.Target.Bytes())
-		} else {
-			minrLog.Infof("DEV #%d Found hash %s with work below target! %v (height: %d) (yay)", d.index, hashNumBig.String(), hashNum, d.work.BlockHeader.Height)
-			d.validShares++
-			data := make([]byte, 0, work.GetworkDataLen)
-			buf := bytes.NewBuffer(data)
-			err := d.work.BlockHeader.Serialize(buf)
-			if err != nil {
-				errStr := fmt.Sprintf("Failed to serialize data: %v", err)
-				minrLog.Errorf("Error submitting work: %v", errStr)
-			} else {
-				result := WorkResult{
-					data:  data[:work.GetworkDataLen],
-					jobID: d.work.JobID,
-				}
+	minrLog.Infof("DEV #%d Found hash %s with work below target! %v (height: %d) (yay)",
+		d.index, hashNumBig.String(), hashNum, hdr.Height)
+	atomic.AddUint64(&d.validShares, 1)
 
-				d.workDone <- result
-			}
+	var buf bytes.Buffer
+	if err := hdr.Serialize(&buf); err != nil {
+		minrLog.Errorf("Error submitting work: failed to serialize data: %v", err)
+		return
+	}
+	data := make([]byte, work.GetworkDataLen)
+	copy(data, buf.Bytes())
+
+	d.workDone <- WorkResult{data: data, jobID: w.jobID}
+}
+
+// runWorker owns one solver instance and grinds nonces on it until shutdown.
+func (d *Device) runWorker(id int) {
+	// A dedicated OS thread keeps the CUDA context binding stable.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	cu.SetDevice(d.cuDeviceID)
+	solver := C.eq_create(C.uint32_t(d.workSize))
+	if solver == nil {
+		minrLog.Errorf("DEV #%d: failed to create solver instance %d", d.index, id)
+		return
+	}
+	defer C.eq_destroy(solver)
+
+	w := &eqWorker{d: d, solver: solver, benchmark: cfg.Benchmark}
+	ptr := cptr.Save(w)
+	defer cptr.Unref(ptr)
+
+	minrLog.Debugf("DEV #%d: solver instance %d running", d.index, id)
+
+	for {
+		cw, ok := d.waitForWork()
+		if !ok {
+			return
 		}
+
+		hdr := cw.BlockHeader
+
+		// Distinct extraNonce per attempt guarantees workers never grind
+		// identical inputs.
+		extraNonce := d.nextExtraNonce()
+		binary.LittleEndian.PutUint64(hdr.ExtraData[:], uint64(extraNonce))
+
+		// Only solo work allows rolling the timestamp.
+		ts := cw.JobTime
+		if cw.IsGetWork {
+			ts = cw.JobTime + (uint32(time.Now().Unix()) - cw.TimeReceived)
+		}
+		hdr.Timestamp = time.Unix(int64(ts), 0)
+
+		nonce, err := wire.RandomUint64()
+		if err != nil {
+			minrLog.Errorf("Unexpected error while generating random nonce: %v", err)
+			nonce = uint64(extraNonce)
+		}
+		hdr.Nonce = uint32(nonce)
+
+		w.header = hdr
+		w.target = cw.Target
+		w.jobID = cw.JobID
+
+		algo := chainParams.Algorithm(hdr.Height)
+		input, err := hdr.SerializeEquihashHeaderBytes(algo)
+		if err != nil {
+			minrLog.Errorf("DEV #%d: failed to serialize equihash header: %v", d.index, err)
+			continue
+		}
+
+		n := C.eqSolveGo(solver, unsafe.Pointer(&input[0]), C.uint32_t(len(input)),
+			C.uint32_t(hdr.Nonce), ptr)
+		if n < 0 {
+			minrLog.Errorf("DEV #%d: solver instance %d CUDA error %d", d.index, id, int(n))
+			return
+		}
+		atomic.AddUint64(&d.allDiffOneShares, uint64(n))
 	}
 }
 
 func (d *Device) runDevice() error {
-	// Bump the extraNonce for the device it's running on
-	// when you begin mining. This ensures each GPU is doing
-	// different work. If the extraNonce has already been
-	// set for valid work, restore that.
-	d.extraNonce += uint32(d.index) << 24
-	d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
+	minrLog.Infof("Started GPU #%d: %s (%d solver instances)", d.index, d.deviceName, d.instances)
 
-	// Need to have this stuff here for a device vs thread issue.
-	runtime.LockOSThread()
-
-	cu.DeviceReset()
-	cu.SetDevice(d.cuDeviceID)
-	cu.SetDeviceFlags(cu.DeviceScheduleBlockingSync)
-
-	// kernel is built with nvcc, not an api call so must be done
-	// at compile time.
-
-	deviceptr := cptr.Save(d)
-	defer cptr.Unref(deviceptr)
-
-	minrLog.Infof("Started GPU #%d: %s", d.index, d.deviceName)
-
-	for {
-		d.updateCurrentWork()
-
-		select {
-		case <-d.quit:
-			return nil
-		default:
-		}
-
-		// Increment extraNonce.
-		util.RolloverExtraNonce(&d.extraNonce)
-		d.lastBlock[work.Nonce1Word] = util.Uint32EndiannessSwap(d.extraNonce)
-		binary.LittleEndian.PutUint64(d.work.BlockHeader.ExtraData[:], uint64(d.extraNonce))
-
-		// Update the timestamp. Only solo work allows you to roll the timestamp.
-		ts := d.work.JobTime
-		if d.work.IsGetWork {
-			diffSeconds := uint32(time.Now().Unix()) - d.work.TimeReceived
-			ts = d.work.JobTime + diffSeconds
-		}
-		d.lastBlock[work.TimestampWord] = util.Uint32EndiannessSwap(ts)
-
-		// Generate and set nonce
-		nonce, err := wire.RandomUint64()
-		if err != nil {
-			minrLog.Errorf("Unexpected error while generating random nonce: %v", err)
-			nonce = 0
-		}
-
-		d.work.BlockHeader.Nonce = uint32(nonce) // TODO
-
-		// Execute the kernel and follow its execution time.
-		currentTime := time.Now()
-
-		algo := chaincfg.TestNetParams.Algorithm(d.work.BlockHeader.Height)
-		equihashInput, err := d.work.BlockHeader.SerializeEquihashHeaderBytes(algo)
-		if err != nil {
-			continue
-		}
-
-		minrLog.Tracef("EquihashSolveCuda(workId=%d, blockHeight=%d, nonce=%d, extraNonce=%d)", d.currentWorkID, d.work.BlockHeader.Height, d.work.BlockHeader.Nonce, d.extraNonce)
-		C.EquihashSolveCuda(unsafe.Pointer(&equihashInput[0]), C.uint32_t(len(equihashInput)), C.uint32_t(d.work.BlockHeader.Nonce), deviceptr)
-
-		elapsedTime := time.Since(currentTime)
-		minrLog.Tracef("GPU #%d: Kernel execution to read time: %v", d.index, elapsedTime)
+	var wg sync.WaitGroup
+	for i := 0; i < d.instances; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			d.runWorker(id)
+		}(i)
 	}
+	wg.Wait()
+	return nil
 }
 
 // ListDevices prints a list of CUDA capable GPUs present.
 func ListDevices() {
-	// CUDA devices
-	// Because mumux3/3/cuda/cu likes to panic instead of error.
+	// Because the cu wrappers panic instead of returning errors.
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Println("No CUDA Capable GPUs present")
@@ -508,21 +518,40 @@ func ListDevices() {
 
 func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkResult) (*Device, error) {
 	d := &Device{
-		index:       index,
-		cuDeviceID:  deviceID,
-		deviceName:  deviceID.Name(),
-		deviceType:  DeviceTypeGPU,
-		cuda:        true,
-		kind:        DeviceKindNVML,
-		quit:        make(chan struct{}),
-		newWork:     make(chan *work.Work, 5),
-		workDone:    workDone,
-		fanPercent:  0,
-		temperature: 0,
-		tempTarget:  0,
+		index:      index,
+		cuDeviceID: deviceID,
+		deviceName: deviceID.Name(),
+		deviceType: DeviceTypeGPU,
+		cuda:       true,
+		kind:       DeviceKindNVML,
+		quit:       make(chan struct{}),
+		workDone:   workDone,
+		extraNonce: uint32(index) << 24,
 	}
 
-	d.cuInSize = 21
+	// Per-device work size (solver thread count); 0 lets the solver scale
+	// to the GPU.
+	if len(cfg.WorkSizeInts) > 0 {
+		d.workSize = cfg.WorkSizeInts[0]
+		if order < len(cfg.WorkSizeInts) {
+			d.workSize = cfg.WorkSizeInts[order]
+		}
+	}
+
+	// Number of concurrent solver instances: fit into free device memory,
+	// leaving ~1.5 GB headroom.
+	d.instances = cfg.Instances
+	if d.instances <= 0 {
+		cu.SetDevice(deviceID)
+		free, _ := cu.MemGetInfo()
+		d.instances = int((free - (1500 << 20)) / solverMemBytes)
+		if d.instances < 1 {
+			d.instances = 1
+		}
+		if d.instances > 8 {
+			d.instances = 8
+		}
+	}
 
 	if !deviceLibraryInitialized {
 		err := nvml.Init()
@@ -547,16 +576,13 @@ func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkRes
 		d.tempTarget = cfg.TempTargetInts[0]
 
 		// Override with the per-device setting if it exists
-		for i := range cfg.TempTargetInts {
-			if i == order {
-				d.tempTarget = uint32(cfg.TempTargetInts[order])
-			}
+		if order < len(cfg.TempTargetInts) {
+			d.tempTarget = cfg.TempTargetInts[order]
 		}
 		d.fanControlActive = true
 	}
 
 	// validate that we can actually do fan control
-	fanControlNotWorking := false
 	if d.tempTarget > 0 {
 		// validate that fan control is supported
 		if !d.fanControlSupported(d.kind) {
@@ -567,9 +593,6 @@ func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkRes
 		if !d.fanTempActive {
 			minrLog.Errorf("DEV #%d ignoring temperature target of %v; "+
 				"could not get initial %v read", index, d.tempTarget, d.kind)
-			fanControlNotWorking = true
-		}
-		if fanControlNotWorking {
 			d.tempTarget = 0
 			d.fanControlActive = false
 		}
@@ -577,13 +600,7 @@ func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkRes
 
 	d.started = uint32(time.Now().Unix())
 
-	// Autocalibrate?
-
 	return d, nil
-}
-
-func equihashSolutionSize(n, k int) int {
-	return 1 << uint32(k) * (n/(k+1) + 1) / 8
 }
 
 func deviceStats(index int) (uint32, uint32) {
@@ -636,7 +653,6 @@ func getCUDevices() ([]cu.Device, error) {
 	cu.Init(0)
 
 	version := cu.Version()
-	fmt.Println(version)
 
 	maj := version / 1000
 	min := version % 100
@@ -669,9 +685,6 @@ func newMinerDevs(m *Miner) (*Miner, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-
-	// XXX Can probably combine these bits with the opencl ones once
-	// I decide what to do about the types.
 
 	for _, CUDeviceID := range CUdeviceIDs {
 		miningAllowed := false

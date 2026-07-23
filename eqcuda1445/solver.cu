@@ -1,9 +1,10 @@
 // Equihash CUDA solver
 // Copyright (c) 2016 John Tromp
-// Copyright (c) 2018 The ExchangeCoin team
+// Copyright (c) 2018-2026 The ExchangeCoin team
 
 #include "eqcuda1445.cuh"
 #include "solver_details.cuh"
+#include "eqcuda1445.h"
 
 verify_code equihash_verify_uncompressed(const char *header, u32 header_len, const proof indices) {
     if (duped(indices))
@@ -16,149 +17,132 @@ verify_code equihash_verify_uncompressed(const char *header, u32 header_len, con
     return verifyrec(&ctx, indices, hash, WK);
 }
 
-verify_code equihash_verify_uncompressed(const std::string &header, const proof indices) {
-    return equihash_verify_uncompressed(header.c_str(), header.length(), indices);
-}
-
 extern "C" int equihash_verify_uncompressed_c(const char *header, u32 header_len, const proof indices) {
     return static_cast<int>(equihash_verify_uncompressed(header, header_len, indices));
 }
 
-verify_code equihash_verify(const char *header, u32 header_len, const cproof indices) {
+extern "C" int equihash_verify_c(const char *header, u32 header_len, const unsigned char *solution) {
     proof sol;
-    uncompress_solution(indices, sol);
-    return equihash_verify_uncompressed(header, header_len, sol);
+    uncompress_solution(solution, sol);
+    return static_cast<int>(equihash_verify_uncompressed(header, header_len, sol));
 }
 
-verify_code equihash_verify(const std::string &header, const cproof indices) {
-    return equihash_verify(header.c_str(), header.length(), indices);
-}
-
-extern "C" int equihash_verify_c(const char *header, u32 header_len, const cproof indices) {
-    return static_cast<int>(equihash_verify(header, header_len, indices));
-}
-
-int equihash_solve(const char *header, u32 header_len, u32 nonce, std::function<void(const cproof)> on_solution_found) {
-#define printf if (debug_logs) printf
-    bool debug_logs = false;
-    const u64 nthreads = 8192;
-    u64 tpb; // threads per block
-    for (tpb = 1; tpb * tpb < nthreads; tpb *= 2); // tpb == roughly square root of nthreads
-    u32 range = 1;
-
-    printf("Looking for wagner-tree on (\"%s\",%u", to_hex((const unsigned char *)header, header_len).c_str(), nonce);
-
-    if (range > 1)
-        printf("-%llu", nonce + range - 1);
-
-    printf(") with %d %d-bits digits and %llu threads (%llu per block)\n", NDIGITS, DIGITBITS, nthreads, tpb);
-    equi eq(static_cast<u32>(nthreads));
-
+struct EqSolver {
+    equi eq;
+    equi *device_eq;
     u32 *heap0, *heap1;
-    checkCudaErrors(cudaMalloc((void **)&heap0, sizeof(digit0)));
-    checkCudaErrors(cudaMalloc((void **)&heap1, sizeof(digit1)));
+    u32 tpb;
+    cudaStream_t stream;
+    equi *host_eq;    // pinned; nsols readback
+    proof *host_sols; // pinned; solution readback
 
+    EqSolver(u32 nthreads)
+        : eq(nthreads), device_eq(nullptr), heap0(nullptr), heap1(nullptr),
+          tpb(0), stream(nullptr), host_eq(nullptr), host_sols(nullptr) {
+        eq.nslots = nullptr;
+        eq.sols = nullptr;
+    }
+};
+
+#define CU_CHECK(call, onfail)                                                        \
+    do {                                                                              \
+        cudaError_t err_ = (call);                                                    \
+        if (err_ != cudaSuccess) {                                                    \
+            fprintf(stderr, "eqcuda1445: %s: %s (%s:%d)\n", #call,                    \
+                    cudaGetErrorString(err_), __FILE__, __LINE__);                    \
+            onfail;                                                                   \
+        }                                                                             \
+    } while (0)
+
+#define CU_NEW(call) CU_CHECK(call, { eq_destroy(s); return nullptr; })
+
+extern "C" EqSolver *eq_create(uint32_t nthreads) {
+    if (nthreads == 0) {
+        // One thread per bucket benchmarked best on Blackwell (stride loops
+        // make oversubscription harmless on smaller GPUs); override with
+        // --worksize if a card likes something else.
+        nthreads = NBUCKETS;
+    }
+    const u32 tpb = 256;
+    nthreads = (nthreads + tpb - 1) / tpb * tpb;
+
+    EqSolver *s = new EqSolver(nthreads);
+    s->tpb = tpb;
+
+    CU_NEW(cudaMalloc((void **)&s->heap0, sizeof(digit0)));
+    CU_NEW(cudaMalloc((void **)&s->heap1, sizeof(digit1)));
     for (u32 r = 0; r < WK; r++)
         if ((r & 1) == 0)
-            eq.hta.trees0[r / 2] = (bucket0 *)(heap0 + r / 2);
+            s->eq.hta.trees0[r / 2] = (bucket0 *)(s->heap0 + r / 2);
         else
-            eq.hta.trees1[r / 2] = (bucket1 *)(heap1 + r / 2);
+            s->eq.hta.trees1[r / 2] = (bucket1 *)(s->heap1 + r / 2);
 
-    checkCudaErrors(cudaMalloc((void **)&eq.nslots, 2 * NBUCKETS * sizeof(u32)));
-    checkCudaErrors(cudaMemset((void *)eq.nslots, 0, 2 * NBUCKETS * sizeof(u32)));
-    checkCudaErrors(cudaMalloc((void **)&eq.sols, MAXSOLS * sizeof(proof)));
+    CU_NEW(cudaMalloc((void **)&s->eq.nslots, 2 * NBUCKETS * sizeof(u32)));
+    CU_NEW(cudaMemset((void *)s->eq.nslots, 0, 2 * NBUCKETS * sizeof(u32)));
+    CU_NEW(cudaMalloc((void **)&s->eq.sols, MAXSOLS * sizeof(proof)));
+    CU_NEW(cudaMalloc((void **)&s->device_eq, sizeof(equi)));
+    CU_NEW(cudaStreamCreateWithFlags(&s->stream, cudaStreamNonBlocking));
+    CU_NEW(cudaMallocHost((void **)&s->host_eq, sizeof(equi)));
+    CU_NEW(cudaMallocHost((void **)&s->host_sols, MAXSOLS * sizeof(proof)));
+    return s;
+}
 
-    equi *device_eq;
-    checkCudaErrors(cudaMalloc((void **)&device_eq, sizeof(equi)));
+extern "C" void eq_destroy(EqSolver *s) {
+    if (!s)
+        return;
+    if (s->stream)
+        cudaStreamSynchronize(s->stream);
+    cudaFree(s->heap0);
+    cudaFree(s->heap1);
+    cudaFree((void *)s->eq.nslots);
+    cudaFree(s->eq.sols);
+    cudaFree(s->device_eq);
+    if (s->host_eq)
+        cudaFreeHost(s->host_eq);
+    if (s->host_sols)
+        cudaFreeHost(s->host_sols);
+    if (s->stream)
+        cudaStreamDestroy(s->stream);
+    delete s;
+}
 
-    cudaEvent_t start, stop;
-    checkCudaErrors(cudaEventCreate(&start));
-    checkCudaErrors(cudaEventCreate(&stop));
+extern "C" int eq_solve(EqSolver *s, const void *header, uint32_t header_len, uint32_t nonce,
+                        int (*on_solution)(void *user_data, void *solution), void *user_data) {
+    if (!s || !header || header_len < 144 || header_len > 512)
+        return -1;
 
-    proof sols[MAXSOLS];
-    u32 sumnsols = 0;
-    for (u32 r = 0; r < range; r++) {
-        checkCudaErrors(cudaEventRecord(start, NULL));
-        eq.setstate((const uint8_t *)header, header_len, nonce);
-
-        printf("eq.blake_ctx.buf: ");
-        for (u64 i = 0; i < sizeof(eq.blake_ctx.buf); i++)
-            printf("%c(%d) ", char(eq.blake_ctx.buf[i]), int(eq.blake_ctx.buf[i]));
-        printf("\n");
-
-        checkCudaErrors(cudaMemcpy(device_eq, &eq, sizeof(equi), cudaMemcpyHostToDevice));
-        digitH<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(0);
-#if BUCKBITS == 16 && RESTBITS == 4 && defined XINTREE && defined(UNROLL)
-        digit_1<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(1);
-        digit2<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(2);
-        digit3<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(3);
-        digit4<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(4);
-        digit5<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(5);
-        digit6<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(6);
-        digit7<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(7);
-        digit8<<<nthreads / tpb, tpb>>>(device_eq);
-        eq.showbsizes(8);
-#else
-        for (u32 r = 1; r < WK; r++) {
-            r & 1 ? digitO<<<nthreads / tpb, tpb>>>(device_eq, r) : digitE<<<nthreads / tpb, tpb>>>(device_eq, r);
-            checkCudaErrors(cudaDeviceSynchronize());
-            eq.showbsizes(r);
-        }
+    // Host-side blake2b init over the header (with nonce patched in); resets nsols.
+    s->eq.setstate((const uint8_t *)header, header_len, nonce);
+#ifdef EQ_DEBUG
+    fprintf(stderr, "eq_solve: len=%u nonce=%u buflen=%u counter=%u\n",
+            header_len, nonce, (unsigned)s->eq.blake_ctx.buflen, (unsigned)s->eq.blake_ctx.counter);
 #endif
-        digitK<<<nthreads / tpb, tpb>>>(device_eq);
-        
-        checkCudaErrors(cudaMemcpy(&eq, device_eq, sizeof(equi), cudaMemcpyDeviceToHost));
-        u32 maxsols = min(MAXSOLS, eq.nsols);
-        checkCudaErrors(cudaMemcpy(sols, eq.sols, maxsols * sizeof(proof), cudaMemcpyDeviceToHost));
-        checkCudaErrors(cudaEventRecord(stop, NULL));
-        checkCudaErrors(cudaEventSynchronize(stop));
-        float duration;
-        checkCudaErrors(cudaEventElapsedTime(&duration, start, stop));
-        printf("%d rounds completed in %.3f seconds.\n", WK, duration / 1000.0f);
 
-        u32 s, nsols, ndupes;
-        for (s = nsols = ndupes = 0; s < maxsols; s++) {
-            if (duped(sols[s])) {
-                ndupes++;
-                continue;
-            }
-            nsols++;
-            if (on_solution_found) {
-                cproof csol;
-                compress_solution(sols[s], csol);
-                on_solution_found(csol);
-            }
-        }
-        printf("%d solutions %d dupes\n", nsols, ndupes);
-        sumnsols += nsols;
+    const u32 blocks = s->eq.nthreads / s->tpb;
+    CU_CHECK(cudaMemcpyAsync(s->device_eq, &s->eq, sizeof(equi), cudaMemcpyHostToDevice, s->stream), return -2);
+    digitH<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
+    for (u32 r = 1; r < WK; r++)
+        if (r & 1)
+            digitO<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq, r);
+        else
+            digitE<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq, r);
+    digitK<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
+
+    CU_CHECK(cudaMemcpyAsync(s->host_eq, s->device_eq, sizeof(equi), cudaMemcpyDeviceToHost, s->stream), return -2);
+    CU_CHECK(cudaMemcpyAsync(s->host_sols, s->eq.sols, MAXSOLS * sizeof(proof), cudaMemcpyDeviceToHost, s->stream), return -2);
+    CU_CHECK(cudaStreamSynchronize(s->stream), return -2);
+    CU_CHECK(cudaGetLastError(), return -2);
+
+    const u32 nsols = s->host_eq->nsols < MAXSOLS ? s->host_eq->nsols : MAXSOLS;
+    int found = 0;
+    for (u32 i = 0; i < nsols; i++) {
+        if (duped(s->host_sols[i]))
+            continue;
+        cproof csol;
+        compress_solution(s->host_sols[i], csol);
+        found++;
+        if (on_solution && on_solution(user_data, csol))
+            break;
     }
-    checkCudaErrors(cudaFree(eq.nslots));
-    checkCudaErrors(cudaFree(eq.sols));
-    checkCudaErrors(cudaFree(eq.hta.trees0[0]));
-    checkCudaErrors(cudaFree(eq.hta.trees1[0]));
-    checkCudaErrors(cudaEventDestroy(start));
-    checkCudaErrors(cudaEventDestroy(stop));
-
-    printf("%d total solutions\n", sumnsols);
-
-#undef printf
-    return 0;
-}
-
-int equihash_solve(const std::string &header, u32 nonce, std::function<void(const cproof)> on_solution_found) {
-    return equihash_solve(header.c_str(), header.length(), nonce, on_solution_found);
-}
-
-extern "C" int equihash_solve_c(const char *header, u32 header_len, u32 nonce,
-                                void (*on_solution_found)(void *user_data, const cproof solution), void *user_data) {
-    return equihash_solve(header, header_len, nonce,
-                          [=](const cproof solution) { on_solution_found(user_data, solution); });
+    return found;
 }
