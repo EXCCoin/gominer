@@ -121,11 +121,10 @@ extern "C" int eq_solve(EqSolver *s, const void *header, uint32_t header_len, ui
     const u32 blocks = s->eq.nthreads / s->tpb;
     CU_CHECK(cudaMemcpyAsync(s->device_eq, &s->eq, sizeof(equi), cudaMemcpyHostToDevice, s->stream), return -2);
     digitH<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
-    for (u32 r = 1; r < WK; r++)
-        if (r & 1)
-            digitO<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq, r);
-        else
-            digitE<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq, r);
+    digitRT<1><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
+    digitRT<2><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
+    digitRT<3><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
+    digitRT<4><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
     digitK<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
 
     CU_CHECK(cudaMemcpyAsync(s->host_eq, s->device_eq, sizeof(equi), cudaMemcpyDeviceToHost, s->stream), return -2);
