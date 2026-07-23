@@ -1,6 +1,12 @@
 
 # gominer
-gominer is an application for performing Proof-of-Work (PoW) mining on the Exchange Coin network. It supports solo and stratum/pool mining using CUDA-capable devices.
+gominer is an application for performing Proof-of-Work (PoW) mining on the Exchange Coin network (Equihash 144,5). It supports solo and stratum/pool mining with two GPU backends:
+
+- **CUDA** (`./build.sh`) — NVIDIA only, fastest.
+- **wgpu** (`./build-wgpu.sh`) — portable: AMD, NVIDIA, and Intel GPUs via
+  Vulkan (Metal/DX12 also supported by the underlying library). No CUDA
+  toolkit or vendor SDK needed — just a Vulkan-capable driver at runtime.
+  Within ~10% of the CUDA backend's speed on the same GPU.
 
 ## Downloading
 Linux and Windows 64-bit binaries may be downloaded from [https://github.com/EXCCoin/excc-binaries/releases/latest](https://github.com/EXCCoin/excc-binaries/releases/latest)
@@ -76,10 +82,18 @@ CUDA_HOME=/path/to/cuda ./build.sh        # build
 CUDA_HOME=/path/to/cuda ./build.sh test   # build + verify GPU solutions on the CPU
 ```
 
+## Building the portable (AMD/NVIDIA/Intel) variant
+```
+# needs Rust (https://rustup.rs), no CUDA:
+./build-wgpu.sh          # produces ./gominer-wgpu
+cd eqwgpu1445 && cargo test --release   # optional: GPU solver self-check
+```
+
 ## Tuning
-- `-I/--instances N` — concurrent solver instances per GPU (default: auto-size
-  from free GPU memory, ~700MB each; 8 instances benchmark best on an RTX 5090).
+- `-I/--instances N` — concurrent solver instances per GPU, ~2.7GB GPU memory
+  each (CUDA default: auto-size from free memory; wgpu default: 2).
 - `-W/--worksize N` — solver thread count per instance (default 2^20).
 
-Reference: an RTX 5090 does ~33 Sol/s with defaults. Solution rates are
-reported in Sol/s (Equihash solutions per second), the unit pools use.
+Reference: an RTX 5090 does ~33 Sol/s (CUDA) / ~30 Sol/s (wgpu) with
+defaults. Rates are reported in Sol/s (Equihash solutions per second), the
+unit pools use.

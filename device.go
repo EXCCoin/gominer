@@ -5,7 +5,6 @@ package main
 /*
 #cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
 #cgo CFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
-#cgo LDFLAGS: -L. -leqcuda1445 -lstdc++
 #include "eqcuda1445/eqcuda1445.h"
 
 static int eqSolveGo(EqSolver *s, const void *hdr, uint32_t len, uint32_t nonce, void *ud) __attribute__((unused));
@@ -28,17 +27,15 @@ import (
 	standalone "github.com/EXCCoin/exccd/blockchain/standalone/v2"
 	"github.com/EXCCoin/exccd/wire"
 
-	"github.com/EXCCoin/gominer/nvml"
 	"github.com/EXCCoin/gominer/util"
 	"github.com/EXCCoin/gominer/work"
 
-	"github.com/EXCCoin/gominer/cu"
 	cptr "github.com/mattn/go-pointer"
 )
 
 // solverMemBytes is the approximate device memory one solver instance needs
-// (measured ~650 MB on CUDA 13).
-const solverMemBytes = 700 << 20
+// (two ~1.31 GB bucket heaps plus bookkeeping).
+const solverMemBytes = 2750 << 20
 
 //export equihashProxyGominer
 func equihashProxyGominer(userData unsafe.Pointer, solution unsafe.Pointer) C.int {
@@ -47,8 +44,6 @@ func equihashProxyGominer(userData unsafe.Pointer, solution unsafe.Pointer) C.in
 	w.handleSolution(csol)
 	return 0
 }
-
-var deviceLibraryInitialized = false
 
 // Constants for fan and temperature bits
 const (
@@ -97,9 +92,8 @@ type Device struct {
 	kind                     string
 	tempTarget               uint32
 
-	cuDeviceID cu.Device
-	instances  int
-	workSize   uint32
+	instances int
+	workSize  uint32
 
 	workDone chan WorkResult
 	started  uint32
@@ -193,7 +187,7 @@ func (d *Device) UpdateFanTemp() {
 	if d.fanTempActive {
 		switch d.kind {
 		case DeviceKindADL, DeviceKindAMDGPU, DeviceKindNVML:
-			fanPercent, temperature := deviceStats(d.index)
+			fanPercent, temperature := backendDeviceStats(d.index)
 			atomic.StoreUint32(&d.fanPercent, fanPercent)
 			atomic.StoreUint32(&d.temperature, temperature)
 		}
@@ -214,8 +208,7 @@ func (d *Device) Status() (float64, uint32, uint32) {
 }
 
 func (d *Device) Release() {
-	cu.SetDevice(d.cuDeviceID)
-	cu.DeviceReset()
+	backendRelease(d.index)
 }
 
 // This is pretty hacky/proof-of-concepty
@@ -421,11 +414,11 @@ func (w *eqWorker) handleSolution(solution []byte) {
 
 // runWorker owns one solver instance and grinds nonces on it until shutdown.
 func (d *Device) runWorker(id int) {
-	// A dedicated OS thread keeps the CUDA context binding stable.
+	// A dedicated OS thread keeps the GPU context binding stable.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	cu.SetDevice(d.cuDeviceID)
+	backendBindThread(d.index)
 	solver := C.eq_create(C.uint32_t(d.workSize))
 	if solver == nil {
 		minrLog.Errorf("DEV #%d: failed to create solver instance %d", d.index, id)
@@ -502,25 +495,24 @@ func (d *Device) runDevice() error {
 	return nil
 }
 
-// ListDevices prints a list of CUDA capable GPUs present.
+// ListDevices prints a list of capable GPUs present.
 func ListDevices() {
 	// Because the cu wrappers panic instead of returning errors.
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Println("No CUDA Capable GPUs present")
+			fmt.Printf("No %s capable GPUs present\n", backendName())
 		}
 	}()
-	devices, _ := getCUDevices()
-	for i, dev := range devices {
-		fmt.Printf("CUDA Capable GPU #%d: %s\n", i, dev.Name())
+	names, _ := backendEnumerate()
+	for i, name := range names {
+		fmt.Printf("%s capable GPU #%d: %s\n", backendName(), i, name)
 	}
 }
 
-func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkResult) (*Device, error) {
+func NewDevice(index int, order int, name string, workDone chan WorkResult) (*Device, error) {
 	d := &Device{
 		index:      index,
-		cuDeviceID: deviceID,
-		deviceName: deviceID.Name(),
+		deviceName: name,
 		deviceType: DeviceTypeGPU,
 		cuda:       true,
 		kind:       DeviceKindNVML,
@@ -538,30 +530,13 @@ func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkRes
 		}
 	}
 
-	// Number of concurrent solver instances: fit into free device memory,
-	// leaving ~1.5 GB headroom.
+	// Number of concurrent solver instances.
 	d.instances = cfg.Instances
 	if d.instances <= 0 {
-		cu.SetDevice(deviceID)
-		free, _ := cu.MemGetInfo()
-		d.instances = int((free - (1500 << 20)) / solverMemBytes)
-		if d.instances < 1 {
-			d.instances = 1
-		}
-		if d.instances > 8 {
-			d.instances = 8
-		}
+		d.instances = backendAutoInstances(index)
 	}
 
-	if !deviceLibraryInitialized {
-		err := nvml.Init()
-		if err != nil {
-			minrLog.Errorf("NVML Init error: %v", err)
-		} else {
-			deviceLibraryInitialized = true
-		}
-	}
-	fanPercent, temperature := deviceStats(d.index)
+	fanPercent, temperature := backendDeviceStats(d.index)
 	// Newer cards will idle with the fan off so just check if we got
 	// a good temperature reading
 	if temperature != 0 {
@@ -603,90 +578,22 @@ func NewCuDevice(index int, order int, deviceID cu.Device, workDone chan WorkRes
 	return d, nil
 }
 
-func deviceStats(index int) (uint32, uint32) {
-	fanPercent := uint32(0)
-	temperature := uint32(0)
-
-	dh, err := nvml.DeviceGetHandleByIndex(index)
-	if err != nil {
-		minrLog.Errorf("NVML DeviceGetHandleByIndex error: %v", err)
-		return fanPercent, temperature
-	}
-
-	nvmlFanSpeed, err := nvml.DeviceFanSpeed(dh)
-	if err != nil {
-		minrLog.Debugf("NVML DeviceFanSpeed error: %v", err)
-	} else {
-		fanPercent = uint32(nvmlFanSpeed)
-	}
-
-	nvmlTemp, err := nvml.DeviceTemperature(dh)
-	if err != nil {
-		minrLog.Debugf("NVML DeviceTemperature error: %v", err)
-	} else {
-		temperature = uint32(nvmlTemp)
-	}
-
-	return fanPercent, temperature
-}
-
 // unsupported -- just here for compilation
 func fanControlSet(index int, fanCur uint32, tempTargetType string, fanChangeLevel string) {
-	minrLog.Errorf("NVML fanControl() reached but shouldn't have been")
-}
-
-func getInfo() ([]cu.Device, error) {
-	cu.Init(0)
-	ids := cu.DeviceGetCount()
-	minrLog.Infof("%v GPUs", ids)
-	var CUdevices []cu.Device
-	for i := 0; i < ids; i++ {
-		dev := cu.DeviceGet(i)
-		CUdevices = append(CUdevices, dev)
-		minrLog.Infof("%v: %v", i, dev.Name())
-	}
-	return CUdevices, nil
-}
-
-// getCUDevices returns the list of devices for the given platform.
-func getCUDevices() ([]cu.Device, error) {
-	cu.Init(0)
-
-	version := cu.Version()
-
-	maj := version / 1000
-	min := version % 100
-
-	minMajor := 5
-	minMinor := 5
-
-	if maj < minMajor || (maj == minMajor && min < minMinor) {
-		return nil, fmt.Errorf("Driver does not support CUDA %v.%v API", minMajor, minMinor)
-	}
-
-	var numDevices int
-	numDevices = cu.DeviceGetCount()
-	if numDevices < 1 {
-		return nil, fmt.Errorf("No devices found")
-	}
-	devices := make([]cu.Device, numDevices)
-	for i := 0; i < numDevices; i++ {
-		dev := cu.DeviceGet(i)
-		devices[i] = dev
-	}
-	return devices, nil
+	minrLog.Errorf("fanControl() reached but shouldn't have been")
 }
 
 func newMinerDevs(m *Miner) (*Miner, int, error) {
-	deviceListIndex := 0
 	deviceListEnabledCount := 0
 
-	CUdeviceIDs, err := getInfo()
+	names, err := backendEnumerate()
 	if err != nil {
 		return nil, 0, err
 	}
+	minrLog.Infof("%v GPUs", len(names))
 
-	for _, CUDeviceID := range CUdeviceIDs {
+	for deviceListIndex, name := range names {
+		minrLog.Infof("%v: %v", deviceListIndex, name)
 		miningAllowed := false
 
 		// Enforce device restrictions if they exist
@@ -701,14 +608,13 @@ func newMinerDevs(m *Miner) (*Miner, int, error) {
 		}
 
 		if miningAllowed {
-			newDevice, err := NewCuDevice(deviceListIndex, deviceListEnabledCount, CUDeviceID, m.workDone)
+			newDevice, err := NewDevice(deviceListIndex, deviceListEnabledCount, name, m.workDone)
 			deviceListEnabledCount++
 			m.devices = append(m.devices, newDevice)
 			if err != nil {
 				return nil, 0, err
 			}
 		}
-		deviceListIndex++
 	}
 
 	return m, deviceListEnabledCount, nil
@@ -716,5 +622,5 @@ func newMinerDevs(m *Miner) (*Miner, int, error) {
 
 // Return the GPU library in use.
 func gpuLib() string {
-	return "CUDA"
+	return backendName()
 }

@@ -41,3 +41,6 @@ obj/
 *.lib
 *.pdb
 .*
+gominer-wgpu
+eqwgpu1445/target/
+Cargo.lock

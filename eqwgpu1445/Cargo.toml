@@ -1,0 +1,16 @@
+[package]
+name = "eqwgpu1445"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Portable Equihash 144,5 GPU solver (wgpu port of the Tromp CUDA solver)"
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+wgpu = "22"
+pollster = "0.3"
+
+[profile.release]
+lto = true
