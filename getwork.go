@@ -65,9 +65,11 @@ func newHTTPClient(cfg *config) (*http.Client, error) {
 	// proxy and TLS.
 	client := http.Client{
 		Transport: &http.Transport{
-			Dial:            dial,
-			TLSClientConfig: tlsConfig,
+			Dial:                dial,
+			TLSClientConfig:     tlsConfig,
+			MaxIdleConnsPerHost: MaxIdleConnections,
 		},
+		Timeout: time.Duration(RequestTimeout) * time.Second,
 	}
 	return &client, nil
 }
@@ -91,31 +93,12 @@ type getWorkSubmitResponseJson struct {
 	}
 }
 
-var (
-	httpClient *http.Client
-)
+var httpClient *http.Client
 
 const (
 	MaxIdleConnections int = 20
 	RequestTimeout     int = 5
 )
-
-// init HTTPClient
-func init() {
-	httpClient = createHTTPClient()
-}
-
-// createHTTPClient for connection re-use
-func createHTTPClient() *http.Client {
-	client := &http.Client{
-		Transport: &http.Transport{
-			MaxIdleConnsPerHost: MaxIdleConnections,
-		},
-		Timeout: time.Duration(RequestTimeout) * time.Second,
-	}
-
-	return client
-}
 
 // GetWork makes a getwork RPC call and returns the result (data and target)
 func GetWork() (*work.Work, error) {
@@ -131,18 +114,11 @@ func GetWork() (*work.Work, error) {
 	if err != nil {
 		return nil, err
 	}
-	httpRequest.Close = true
 	httpRequest.Header.Set("Content-Type", "application/json")
 
 	// Configure basic access authorization.
 	httpRequest.SetBasicAuth(cfg.RPCUser, cfg.RPCPassword)
 
-	// Create the new HTTP client that is configured according to the user-
-	// specified options and submit the request.
-	httpClient, err := newHTTPClient(cfg)
-	if err != nil {
-		return nil, err
-	}
 	httpResponse, err := httpClient.Do(httpRequest)
 	if err != nil {
 		return nil, err
@@ -243,18 +219,11 @@ func GetWorkSubmit(data []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	httpRequest.Close = true
 	httpRequest.Header.Set("Content-Type", "application/json")
 
 	// Configure basic access authorization.
 	httpRequest.SetBasicAuth(cfg.RPCUser, cfg.RPCPassword)
 
-	// Create the new HTTP client that is configured according to the user-
-	// specified options and submit the request.
-	httpClient, err := newHTTPClient(cfg)
-	if err != nil {
-		return false, err
-	}
 	httpResponse, err := httpClient.Do(httpRequest)
 	if err != nil {
 		return false, err

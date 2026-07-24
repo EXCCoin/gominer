@@ -36,7 +36,14 @@ func NewMiner() (*Miner, error) {
 	m := &Miner{
 		workDone:         make(chan WorkResult, 10),
 		quit:             make(chan struct{}),
-		needsWorkRefresh: make(chan struct{}),
+		needsWorkRefresh: make(chan struct{}, 1),
+	}
+	if cfg.Pool == "" && !cfg.Benchmark {
+		client, err := newHTTPClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+		httpClient = client
 	}
 
 	m.devices = make([]*Device, 0)
@@ -104,7 +111,6 @@ func (m *Miner) workSubmitThread() {
 					if submitted {
 						minrLog.Debugf("Submitted work to pool successfully: %v", submitted)
 					}
-					m.needsWorkRefresh <- struct{}{}
 				}
 			}
 		}
@@ -114,8 +120,16 @@ func (m *Miner) workSubmitThread() {
 func (m *Miner) workRefreshThread() {
 	defer m.wg.Done()
 
-	t := time.NewTicker(5 * time.Second)
+	refreshInterval := 5 * time.Second
+	if m.pool == nil {
+		refreshInterval = time.Second
+	}
+	t := time.NewTicker(refreshInterval)
 	defer t.Stop()
+	var poolWorkReady <-chan struct{}
+	if m.pool != nil {
+		poolWorkReady = m.pool.WorkReady
+	}
 
 	for {
 		// Only use that is we are not using a pool.
@@ -149,6 +163,7 @@ func (m *Miner) workRefreshThread() {
 			return
 		case <-t.C:
 		case <-m.needsWorkRefresh:
+		case <-poolWorkReady:
 		}
 	}
 }

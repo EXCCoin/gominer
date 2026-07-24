@@ -54,6 +54,7 @@ type Stratum struct {
 	Diff      float64
 	Target    *big.Int
 	PoolWork  NotifyWork
+	WorkReady chan struct{}
 
 	Started uint32
 }
@@ -180,7 +181,7 @@ func sliceRemove(s []uint64, e uint64) []uint64 {
 // StratumConn starts the initial connection to a stratum pool and sets defaults
 // in the pool object.
 func StratumConn(pool, user, pass, proxy, proxyUser, proxyPass, version string) (*Stratum, error) {
-	var stratum Stratum
+	stratum := Stratum{WorkReady: make(chan struct{}, 1)}
 	stratum.cfg.User = user
 	stratum.cfg.Pass = pass
 	stratum.cfg.Proxy = proxy
@@ -429,6 +430,10 @@ func (s *Stratum) handleNotifyRes(resp interface{}) {
 	s.PoolWork.NtimeDelta = parsedNtime - time.Now().Unix()
 	s.PoolWork.Clean = nResp.CleanJobs
 	s.PoolWork.NewWork = true
+	select {
+	case s.WorkReady <- struct{}{}:
+	default:
+	}
 	log.Trace("notify: ", spew.Sdump(nResp))
 }
 
