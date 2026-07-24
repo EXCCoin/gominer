@@ -178,6 +178,33 @@ func sliceRemove(s []uint64, e uint64) []uint64 {
 	return s
 }
 
+func unmarshalBasicReply(objmap map[string]json.RawMessage) (*BasicReply, error) {
+	var id uint64
+	if err := json.Unmarshal(objmap["id"], &id); err != nil {
+		return nil, err
+	}
+	var result bool
+	if err := json.Unmarshal(objmap["result"], &result); err != nil {
+		return nil, err
+	}
+
+	resp := &BasicReply{ID: id, Result: result}
+	if result {
+		return resp, nil
+	}
+	var poolErr *PoolError
+	if raw, ok := objmap["error"]; ok {
+		if err := json.Unmarshal(raw, &poolErr); err != nil {
+			return nil, err
+		}
+	}
+	if poolErr != nil {
+		resp.Error.ErrNum = poolErr.Code
+		resp.Error.ErrStr = poolErr.Message
+	}
+	return resp, nil
+}
+
 // StratumConn starts the initial connection to a stratum pool and sets defaults
 // in the pool object.
 func StratumConn(pool, user, pass, proxy, proxyUser, proxyPass, version string) (*Stratum, error) {
@@ -533,41 +560,7 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 
 	log.Trace("Received: method: ", method, " id: ", id)
 	if id == s.authID {
-		var (
-			objmap      map[string]json.RawMessage
-			id          uint64
-			result      bool
-			errorHolder PoolError
-		)
-		err := json.Unmarshal(blob, &objmap)
-		if err != nil {
-			return nil, err
-		}
-		resp := &BasicReply{}
-
-		err = json.Unmarshal(objmap["id"], &id)
-		if err != nil {
-			return nil, err
-		}
-		resp.ID = id
-
-		err = json.Unmarshal(objmap["result"], &result)
-		if err != nil {
-			return nil, err
-		}
-		err = json.Unmarshal(objmap["error"], &errorHolder)
-		if err != nil {
-			return nil, err
-		}
-		resp.Result = result
-
-		if !result {
-			resp.Error.ErrNum = uint64(errorHolder.Code)
-			resp.Error.ErrStr = errorHolder.Message
-		}
-
-		return resp, nil
-
+		return unmarshalBasicReply(objmap)
 	}
 	if id == s.subID {
 		var resi []interface{}
@@ -634,40 +627,7 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 		return resp, nil
 	}
 	if sliceContains(s.submitIDs, id) {
-		var (
-			objmap      map[string]json.RawMessage
-			id          uint64
-			result      bool
-			errorHolder PoolError
-		)
-		err := json.Unmarshal(blob, &objmap)
-		if err != nil {
-			return nil, err
-		}
-		resp := &BasicReply{}
-
-		err = json.Unmarshal(objmap["id"], &id)
-		if err != nil {
-			return nil, err
-		}
-		resp.ID = id
-
-		err = json.Unmarshal(objmap["result"], &result)
-		if err != nil {
-			return nil, err
-		}
-		err = json.Unmarshal(objmap["error"], &errorHolder)
-		if err != nil {
-			return nil, err
-		}
-		resp.Result = result
-
-		if !result {
-			resp.Error.ErrNum = uint64(errorHolder.Code)
-			resp.Error.ErrStr = errorHolder.Message
-		}
-
-		return resp, nil
+		return unmarshalBasicReply(objmap)
 	}
 	switch method {
 	case "mining.notify":

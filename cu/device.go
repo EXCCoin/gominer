@@ -63,6 +63,16 @@ func (dev Device) Name() string {
 	return C.GoString(&buf[0])
 }
 
+// DevicePCIBusID returns the PCI identity for a CUDA device ordinal.
+func DevicePCIBusID(ordinal int) string {
+	buf := make([]C.char, 32)
+	err := Result(C.cudaDeviceGetPCIBusId(&buf[0], C.int(len(buf)), C.int(ordinal)))
+	if err != SUCCESS {
+		panic(err)
+	}
+	return C.GoString(&buf[0])
+}
+
 // Set the device as current for the calling thread.
 func SetDevice(device Device) {
 	err := Result(C.cudaSetDevice(C.int(device)))

@@ -43,7 +43,6 @@ obj/
 .*
 gominer-wgpu
 eqwgpu1445/target/
-Cargo.lock
 
 # Runtime/benchmark artifacts
 beam_*.bin

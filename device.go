@@ -3,8 +3,7 @@
 package main
 
 /*
-#cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
-#cgo CFLAGS: -O3 -march=x86-64 -mtune=generic -Wall -Werror
+#cgo CFLAGS: -O3 -Wall -Werror
 #include "eqcuda1445/eqcuda1445.h"
 
 static int eqSolveGo(EqSolver *s, const void *hdr, uint32_t len, uint32_t nonce, void *ud) __attribute__((unused));
@@ -32,10 +31,6 @@ import (
 
 	cptr "github.com/mattn/go-pointer"
 )
-
-// solverMemBytes is the approximate device memory one solver instance needs
-// (two ~1.31 GB bucket heaps plus bookkeeping).
-const solverMemBytes = 2750 << 20
 
 //export equihashProxyGominer
 func equihashProxyGominer(userData unsafe.Pointer, solution unsafe.Pointer) C.int {
@@ -397,8 +392,12 @@ func (w *eqWorker) handleSolution(solution []byte) {
 		return
 	}
 
-	minrLog.Infof("DEV #%d Found hash %s with work below target! %v (height: %d) (yay)",
-		d.index, hashNumBig.String(), hashNum, hdr.Height)
+	solutionType := "block candidate"
+	if w.jobID != "" {
+		solutionType = "pool share"
+	}
+	minrLog.Infof("DEV #%d Found %s: hash %s below target %v (height: %d)",
+		d.index, solutionType, hashNumBig.String(), hashNum, hdr.Height)
 	atomic.AddUint64(&d.validShares, 1)
 
 	var buf bytes.Buffer
@@ -503,7 +502,11 @@ func ListDevices() {
 			fmt.Printf("No %s capable GPUs present\n", backendName())
 		}
 	}()
-	names, _ := backendEnumerate()
+	names, err := backendEnumerate()
+	if err != nil {
+		fmt.Printf("No %s capable GPUs present: %v\n", backendName(), err)
+		return
+	}
 	for i, name := range names {
 		fmt.Printf("%s capable GPU #%d: %s\n", backendName(), i, name)
 	}

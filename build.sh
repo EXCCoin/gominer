@@ -35,10 +35,10 @@ g++ -O3 -march=x86-64 -mtune=generic -fPIC -std=c++17 -c eqcuda1445/blake/blake2
     -Xptxas -O3 -Xcompiler -O3,-fPIC -c eqcuda1445/solver.cu -o obj/solver.o
 ar rcs libeqcuda1445.a obj/solver.o obj/blake.o
 
-# ./build.sh test — solve 20 nonces on the GPU and verify every solution
+# ./build.sh test — solve 20 nonces on every GPU and verify every solution
 # against the CPU verifier.
 if [ "${1:-}" = "test" ]; then
-    g++ -O2 -std=c++17 -I. eqcuda1445/test_verify.cpp libeqcuda1445.a \
+    g++ -O2 -std=c++17 -I. -I"${CUDA_HOME}/include" eqcuda1445/test_verify.cpp libeqcuda1445.a \
         -o obj/test_verify -L"${CUDA_HOME}/lib64" -lcudart_static -ldl -lrt -lpthread
     ./obj/test_verify
 fi

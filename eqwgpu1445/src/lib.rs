@@ -447,6 +447,43 @@ pub extern "C" fn eq_set_adapter(index: u32) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn shader_validates_and_compiles_to_spirv() {
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("solver.wgsl"))
+            .expect("parse solver WGSL");
+        let info = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            Default::default(),
+        )
+        .validate(&module)
+        .expect("validate solver WGSL");
+        for (entry_point, round) in [
+            ("digitH", None),
+            ("digitR", Some(1)),
+            ("digitR", Some(2)),
+            ("digitR", Some(3)),
+            ("digitR", Some(4)),
+            ("digitK", None),
+        ] {
+            let mut constants = wgpu::naga::back::PipelineConstants::from([(
+                "NTHREADS".to_string(),
+                DEFAULT_NTHREADS as f64,
+            )]);
+            if let Some(round) = round {
+                constants.insert("ROUND".to_string(), round as f64);
+            }
+            let (module, info) =
+                wgpu::naga::back::pipeline_constants::process_overrides(&module, &info, &constants)
+                    .unwrap_or_else(|e| panic!("resolve {entry_point} overrides: {e}"));
+            let pipeline = wgpu::naga::back::spv::PipelineOptions {
+                shader_stage: wgpu::naga::ShaderStage::Compute,
+                entry_point: entry_point.to_string(),
+            };
+            wgpu::naga::back::spv::write_vec(&module, &info, &Default::default(), Some(&pipeline))
+                .unwrap_or_else(|e| panic!("compile {entry_point} to SPIR-V: {e}"));
+        }
+    }
+
     // full hash of leaf index: blake2b(header || le32(idx/3)), take 18-byte
     // sub-hash idx%3 — used to verify Wagner conditions on GPU solutions
     fn leaf_hash(h: &[u64; 8], rem: &[u8; 52], idx: u32) -> [u8; 18] {

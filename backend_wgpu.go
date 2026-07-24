@@ -49,9 +49,9 @@ func backendBindThread(ordinal int) {
 }
 
 func backendAutoInstances(ordinal int) int {
-	// ponytail: no portable free-VRAM query through this ABI; 2 instances
-	// (~5.4GB) fits any card worth mining on. Raise with --instances.
-	return 2
+	// One instance is the safe portable default (~2.7GB). Raise it only after
+	// benchmarking the specific adapter with --instances.
+	return 1
 }
 
 func backendRelease(ordinal int) {}

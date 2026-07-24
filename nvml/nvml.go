@@ -110,6 +110,14 @@ func DeviceGetHandleByIndex(idx int) (DeviceHandle, error) {
 	return DeviceHandle{device}, r
 }
 
+func DeviceGetHandleByPCIBusID(busID string) (DeviceHandle, error) {
+	id := C.CString(busID)
+	defer C.free(unsafe.Pointer(id))
+	var device C.nvmlDevice_t
+	r := NewResult(C.nvmlDeviceGetHandleByPciBusId(id, &device))
+	return DeviceHandle{device}, r
+}
+
 //compute mode
 
 func DeviceComputeMode(dh DeviceHandle) (ComputeMode, error) {

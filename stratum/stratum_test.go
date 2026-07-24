@@ -2,8 +2,24 @@ package stratum
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 )
+
+func TestSubmitReplyMayOmitError(t *testing.T) {
+	s := &Stratum{submitIDs: []uint64{4}}
+	resp, err := s.Unmarshal([]byte(`{"result":true,"id":4}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.handleBasicReply(resp)
+	if got := atomic.LoadUint64(&s.ValidShares); got != 1 {
+		t.Fatalf("valid shares = %d, want 1", got)
+	}
+	if len(s.submitIDs) != 0 {
+		t.Fatalf("submit IDs were not cleared: %v", s.submitIDs)
+	}
+}
 
 func TestNotifySignalsWorkReady(t *testing.T) {
 	s := &Stratum{WorkReady: make(chan struct{}, 1)}
