@@ -94,6 +94,5 @@ cd eqwgpu1445 && cargo test --release   # optional: GPU solver self-check
   each (CUDA default: auto-size from free memory; wgpu default: 2).
 - `-W/--worksize N` — solver thread count per instance (default 2^20).
 
-Reference: an RTX 5090 does ~33 Sol/s (CUDA) / ~30 Sol/s (wgpu) with
-defaults. Rates are reported in Sol/s (Equihash solutions per second), the
-unit pools use.
+Reference: an RTX 5090 does ~248 Sol/s with the CUDA solver defaults. Rates
+are reported in Sol/s (Equihash solutions per second), the unit pools use.

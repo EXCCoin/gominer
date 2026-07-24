@@ -7,8 +7,8 @@
 extern "C" {
 #endif
 
-/* Opaque per-instance solver context. Each instance owns ~2.7 GB of device
- * memory and its own CUDA stream; create several per GPU to keep it busy. */
+/* Opaque per-instance solver context. Each instance owns ~2.2 GB of device
+ * memory and its own CUDA stream. */
 typedef struct EqSolver EqSolver;
 
 /* Implemented on the Go side (cgo export); called once per non-duplicate
@@ -22,10 +22,10 @@ int equihashProxyGominer(void *userData, void *solution);
 EqSolver *eq_create(uint32_t nthreads);
 void eq_destroy(EqSolver *solver);
 
-/* Runs one (header, nonce) solve. header must be the >= 144-byte serialized
- * Equihash input (180 bytes for algo v1); nonce is patched into the header's
- * nonce field at byte offset 140. Returns the number of solutions found, or
- * a negative value on CUDA error. */
+/* Runs one (header, nonce) solve. header must be the 180-byte serialized
+ * algo-v1 Equihash input; nonce is patched into the header's nonce field at
+ * byte offset 140. Returns the number of solutions found, or a negative value
+ * on CUDA error. */
 int eq_solve(EqSolver *solver, const void *header, uint32_t header_len, uint32_t nonce,
              int (*on_solution)(void *user_data, void *solution), void *user_data);
 

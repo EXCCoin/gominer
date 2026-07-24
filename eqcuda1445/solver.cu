@@ -4,6 +4,7 @@
 
 #include "eqcuda1445.cuh"
 #include "solver_details.cuh"
+#include "big_solver.cuh"
 #include "eqcuda1445.h"
 
 verify_code equihash_verify_uncompressed(const char *header, u32 header_len, const proof indices) {
@@ -30,14 +31,17 @@ extern "C" int equihash_verify_c(const char *header, u32 header_len, const unsig
 struct EqSolver {
     equi eq;
     equi *device_eq;
-    u32 *heap0, *heap1;
+    u32 *big0, *big1;
+    u32 *counts0, *counts1;
+    u64 *parents[WK - 1];
     u32 tpb;
     cudaStream_t stream;
     equi *host_eq;    // pinned; nsols readback
     proof *host_sols; // pinned; solution readback
 
     EqSolver(u32 nthreads)
-        : eq(nthreads), device_eq(nullptr), heap0(nullptr), heap1(nullptr),
+        : eq(nthreads), device_eq(nullptr), big0(nullptr), big1(nullptr),
+          counts0(nullptr), counts1(nullptr), parents{},
           tpb(0), stream(nullptr), host_eq(nullptr), host_sols(nullptr) {
         eq.nslots = nullptr;
         eq.sols = nullptr;
@@ -69,16 +73,15 @@ extern "C" EqSolver *eq_create(uint32_t nthreads) {
     EqSolver *s = new EqSolver(nthreads);
     s->tpb = tpb;
 
-    CU_NEW(cudaMalloc((void **)&s->heap0, sizeof(digit0)));
-    CU_NEW(cudaMalloc((void **)&s->heap1, sizeof(digit1)));
-    for (u32 r = 0; r < WK; r++)
-        if ((r & 1) == 0)
-            s->eq.hta.trees0[r / 2] = (bucket0 *)(s->heap0 + r / 2);
-        else
-            s->eq.hta.trees1[r / 2] = (bucket1 *)(s->heap1 + r / 2);
-
-    CU_NEW(cudaMalloc((void **)&s->eq.nslots, 2 * NBUCKETS * sizeof(u32)));
-    CU_NEW(cudaMemset((void *)s->eq.nslots, 0, 2 * NBUCKETS * sizeof(u32)));
+    CU_NEW(cudaMalloc((void **)&s->big0, size_t(BB_SLOTS) * 5 * sizeof(u32)));
+    CU_NEW(cudaMalloc((void **)&s->big1, size_t(BB_MID_SLOTS) * 4 * sizeof(u32)));
+    CU_NEW(cudaMalloc((void **)&s->counts0, BB_BUCKETS * sizeof(u32)));
+    CU_NEW(cudaMalloc((void **)&s->counts1, BB_MID_BUCKETS * sizeof(u32)));
+    CU_NEW(cudaMalloc((void **)&s->parents[0], size_t(BB_MID_SLOTS) * sizeof(u64)));
+    // Round-2/3 parents share aligned records with their hashes; reuse the
+    // otherwise obsolete round-3 parent plane for the final hash layer.
+    CU_NEW(cudaMalloc((void **)&s->parents[2], size_t(BB_MID_SLOTS) * sizeof(u64)));
+    CU_NEW(cudaMalloc((void **)&s->parents[3], size_t(BB_SLOTS) * sizeof(u64)));
     CU_NEW(cudaMalloc((void **)&s->eq.sols, MAXSOLS * sizeof(proof)));
     CU_NEW(cudaMalloc((void **)&s->device_eq, sizeof(equi)));
     CU_NEW(cudaStreamCreateWithFlags(&s->stream, cudaStreamNonBlocking));
@@ -92,9 +95,12 @@ extern "C" void eq_destroy(EqSolver *s) {
         return;
     if (s->stream)
         cudaStreamSynchronize(s->stream);
-    cudaFree(s->heap0);
-    cudaFree(s->heap1);
-    cudaFree((void *)s->eq.nslots);
+    cudaFree(s->big0);
+    cudaFree(s->big1);
+    cudaFree(s->counts0);
+    cudaFree(s->counts1);
+    for (u32 r = 0; r < WK - 1; ++r)
+        cudaFree(s->parents[r]);
     cudaFree(s->eq.sols);
     cudaFree(s->device_eq);
     if (s->host_eq)
@@ -108,7 +114,7 @@ extern "C" void eq_destroy(EqSolver *s) {
 
 extern "C" int eq_solve(EqSolver *s, const void *header, uint32_t header_len, uint32_t nonce,
                         int (*on_solution)(void *user_data, void *solution), void *user_data) {
-    if (!s || !header || header_len < 144 || header_len > 512)
+    if (!s || !header || header_len != 180)
         return -1;
 
     // Host-side blake2b init over the header (with nonce patched in); resets nsols.
@@ -120,12 +126,34 @@ extern "C" int eq_solve(EqSolver *s, const void *header, uint32_t header_len, ui
 
     const u32 blocks = s->eq.nthreads / s->tpb;
     CU_CHECK(cudaMemcpyAsync(s->device_eq, &s->eq, sizeof(equi), cudaMemcpyHostToDevice, s->stream), return -2);
-    digitH<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
-    digitRT<1><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
-    digitRT<2><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
-    digitRT<3><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
-    digitRT<4><<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
-    digitK<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq);
+    CU_CHECK(cudaMemsetAsync(s->counts0, 0, BB_BUCKETS * sizeof(u32), s->stream), return -2);
+    bb_digitH<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq, s->big0, s->counts0);
+
+    CU_CHECK(cudaMemsetAsync(s->counts1, 0, BB_MID_BUCKETS * sizeof(u32), s->stream), return -2);
+    bb_round<1, 3, 12, BB_CAPACITY, 13, BB_MID_CAPACITY, 4, 3, 83, 1344>
+        <<<BB_BUCKETS * 8, s->tpb, 0, s->stream>>>(
+        s->big0, s->big1, s->counts0, s->counts1, nullptr, s->parents[0]);
+
+    CU_CHECK(cudaMemsetAsync(s->counts0, 0, BB_BUCKETS * sizeof(u32), s->stream), return -2);
+    bb_round<2, 2, 13, BB_MID_CAPACITY, 12, BB_CAPACITY, 3, 2, 60, 1408>
+        <<<BB_MID_BUCKETS * 4, s->tpb, 0, s->stream>>>(
+        s->big1, s->big0, s->counts1, s->counts0, s->parents[0], nullptr);
+
+    CU_CHECK(cudaMemsetAsync(s->counts1, 0, BB_MID_BUCKETS * sizeof(u32), s->stream), return -2);
+    bb_round<3, 2, 12, BB_CAPACITY, 13, BB_MID_CAPACITY, 2, 2, 35, 2432>
+        <<<BB_BUCKETS * 4, s->tpb, 0, s->stream>>>(
+        s->big0, s->big1, s->counts0, s->counts1, nullptr, nullptr);
+
+    CU_CHECK(cudaMemsetAsync(s->counts0, 0, BB_BUCKETS * sizeof(u32), s->stream), return -2);
+    bb_round<4, 1, 13, BB_MID_CAPACITY, 12, BB_CAPACITY, 2, 1, 12, 2560>
+        <<<BB_MID_BUCKETS * 2, s->tpb, 0, s->stream>>>(
+        s->big1, reinterpret_cast<u32 *>(s->parents[2]),
+        s->counts1, s->counts0, nullptr, s->parents[3]);
+
+    bb_final<0><<<BB_BUCKETS, s->tpb, 0, s->stream>>>(
+        s->device_eq, reinterpret_cast<const u32 *>(s->parents[2]), s->counts0, s->big0,
+        s->parents[0], reinterpret_cast<const u64 *>(s->big0),
+        reinterpret_cast<const u64 *>(s->big1), s->parents[3]);
 
     CU_CHECK(cudaMemcpyAsync(s->host_eq, s->device_eq, sizeof(equi), cudaMemcpyDeviceToHost, s->stream), return -2);
     CU_CHECK(cudaMemcpyAsync(s->host_sols, s->eq.sols, MAXSOLS * sizeof(proof), cudaMemcpyDeviceToHost, s->stream), return -2);

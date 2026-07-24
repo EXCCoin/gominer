@@ -159,14 +159,12 @@ static void setperson(blake2b_state *ctx) {
 }
 
 void setheader(blake2b_state *ctx, const uint8_t *input, u32 input_len, u32 nonce) {
-    uint8_t *localInput = (uint8_t*)malloc(input_len*sizeof(uint8_t));
-    memcpy(localInput, input, input_len*sizeof(uint8_t));
-
-    *((u32 *)&localInput[140]) = nonce;
+    uint8_t localInput[180];
+    memcpy(localInput, input, input_len);
+    nonce = htole32(nonce);
+    memcpy(localInput + 140, &nonce, sizeof(nonce));
 
     blake2b_update(ctx, localInput, input_len);
-
-    free(localInput);
 }
 
 void genhash(const blake2b_state *ctx, u32 idx, uchar *hash) {
@@ -633,47 +631,36 @@ struct equi {
 
 __global__ void digitH(equi *eq) {
     uchar hash[HASHOUT];
-    blake2b_state state;
-    equi::htlayout htl(eq, 0);
-    const u32 hashbytes = hashsize(0u);
     const u32 id = blockIdx.x * blockDim.x + threadIdx.x;
+    // State that does not depend on the hash index is loaded once per thread
+    // instead of once per hash (33M redundant global loads per solve).
+    blake2b_pre pre;
+    blake2b_precompute(&eq->blake_ctx, &pre);
     for (u32 block = id; block < NBLOCKS; block += eq->nthreads) {
-        state = eq->blake_ctx;
-        blake2b_gpu_hash(&state, block, hash, HASHOUT);
+        blake2b_gpu_hash_pre(&pre, block, hash);
+        // Reserve all three bucket slots first: the atomics pipeline against
+        // each other instead of each store waiting on its own atomic's
+        // round-trip latency.
+        u32 slots[HASHESPERBLAKE];
+        u32 bucketids[HASHESPERBLAKE];
+#pragma unroll
         for (u32 i = 0; i < HASHESPERBLAKE; i++) {
             const uchar *ph = hash + i * WN / 8;
-#if BUCKBITS == 16 && RESTBITS == 4
-            const u32 bucketid = ((u32)ph[0] << 8) | ph[1];
-#ifdef XINTREE
-            const u32 xhash = ph[2] >> 4;
-#endif
-#elif BUCKBITS == 14 && RESTBITS == 6
-            const u32 bucketid = ((u32)ph[0] << 6) | ph[1] >> 2;
-#elif BUCKBITS == 12 && RESTBITS == 8
-            const u32 bucketid = ((u32)ph[0] << 4) | ph[1] >> 4;
-#elif BUCKBITS == 20 && RESTBITS == 4
-            const u32 bucketid = ((((u32)ph[0] << 8) | ph[1]) << 4) | ph[2] >> 4;
-#ifdef XINTREE
-            const u32 xhash = ph[2] & 0xf;
-#endif
-#elif BUCKBITS == 12 && RESTBITS == 4
-            const u32 bucketid = ((u32)ph[0] << 4) | ph[1] >> 4;
-#ifdef XINTREE
-            const u32 xhash = ph[1] & 0xf;
-#endif
+#if BUCKBITS == 20 && RESTBITS == 4
+            bucketids[i] = ((((u32)ph[0] << 8) | ph[1]) << 4) | ph[2] >> 4;
 #else
 #error not implemented
 #endif
-            const u32 slot = atomicAdd(&eq->nslots[0][bucketid], 1);
-            if (slot >= NSLOTS)
+            slots[i] = atomicAdd(&eq->nslots[0][bucketids[i]], 1);
+        }
+#pragma unroll
+        for (u32 i = 0; i < HASHESPERBLAKE; i++) {
+            if (slots[i] >= NSLOTS)
                 continue;
-            slot0 &s = eq->hta.trees0[0][bucketid][slot];
-#ifdef XINTREE
-            s.attr = tree(block * HASHESPERBLAKE + i, xhash);
-#else
+            const uchar *ph = hash + i * WN / 8;
+            slot0 &s = eq->hta.trees0[0][bucketids[i]][slots[i]];
             s.attr = tree(block * HASHESPERBLAKE + i);
-#endif
-            memcpy(s.hash->bytes + htl.nextbo, ph + WN / 8 - hashbytes, hashbytes);
+            memcpy(s.hash->bytes, ph + WN / 8 - 16, 16);
         }
     }
 }
@@ -684,13 +671,6 @@ __global__ void digitH(equi *eq) {
 // Produces exactly the same pair set as the original per-thread linked-list
 // version, so solutions are identical.
 #if WN == 144 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
-
-#define EQ_SLOT_WORDS 5
-
-// byte b of the hash stored in shared-staged slot s (u32 words, little-endian)
-__device__ __forceinline__ u32 eq_shbyte(const u32 *sh, u32 s, u32 b) {
-    return (sh[s * EQ_SLOT_WORDS + 1 + b / 4] >> (8 * (b & 3))) & 0xff;
-}
 
 // Warp-per-bucket collision round, fully specialized at compile time per
 // round R: slot strides shrink as hash words are consumed (5,5,4,3 words in,
