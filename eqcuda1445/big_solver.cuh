@@ -1,6 +1,11 @@
 // Large-bucket Equihash (144,5) CUDA dataflow.
 #pragma once
 
+#ifdef EQ_PHASE_TIMING
+// [round][0]=init+compact cycles, [1]=match+scatter cycles, [2]=blocks
+__device__ unsigned long long eq_phase_cycles[WK + 1][3];
+#endif
+
 static constexpr u32 BB_BUCKET_BITS = 12;
 static constexpr u32 BB_BUCKETS = 1u << BB_BUCKET_BITS;
 static constexpr u32 BB_CAPACITY = 8688;
@@ -11,36 +16,8 @@ static constexpr u32 BB_MID_CAPACITY = 4592;
 static constexpr u32 BB_MID_SLOTS = BB_MID_BUCKETS * BB_MID_CAPACITY;
 static constexpr u32 BB_LEAF_MASK = (1u << (DIGITBITS + 1)) - 1;
 
-template <u32 WORDS>
-__device__ __forceinline__ u32 bb_get(const u32 *data, u32 index, u32 word) {
-    return data[index * WORDS + word];
-}
-
-template <u32 WORDS>
-__device__ __forceinline__ void bb_set(u32 *data, u32 index, u32 word, u32 value) {
-    data[index * WORDS + word] = value;
-}
-
 __device__ __forceinline__ u32 bb_leaf_get(const u32 *data, u32 index, u32 word) {
     return word < 4 ? data[index * 4 + word] : data[BB_SLOTS * 4 + index];
-}
-
-template <u32 ROUND, u32 WORDS>
-__device__ __forceinline__ u32 bb_input_get(const u32 *data, u32 index, u32 word) {
-    u32 value;
-    if constexpr (ROUND == 1)
-        value = bb_leaf_get(data, index, word);
-    else if constexpr (ROUND == 3 || ROUND == 4)
-        value = data[index * 4 + word];
-    else
-        value = bb_get<WORDS>(data, index, word);
-    if constexpr (ROUND == 1)
-        if (word == 3)
-            value &= 0xfff00000u;
-    if constexpr (ROUND == 4)
-        if (word == 1)
-            value &= 0xe0000000u;
-    return value;
 }
 
 __device__ __forceinline__ u32 bb_be32(const uchar *p) {
@@ -97,12 +74,12 @@ __global__ void bb_digitH(equi *eq, u32 *out, u32 *counts) {
 template <u32 ROUND, u32 PART_BITS,
           u32 IN_BUCKET_BITS, u32 IN_CAPACITY,
           u32 OUT_BUCKET_BITS, u32 OUT_CAPACITY,
-          u32 IN_WORDS, u32 OUT_WORDS, u32 OUT_BITS, u32 SELECT_CAPACITY>
-__global__ __launch_bounds__(256) void bb_round(const u32 *__restrict__ in,
+          u32 IN_WORDS, u32 OUT_WORDS, u32 OUT_BITS, u32 SELECT_CAPACITY,
+          u32 TPB = 256>
+__global__ __launch_bounds__(TPB) void bb_round(const u32 *__restrict__ in,
                                                  u32 *__restrict__ out,
                                                  const u32 *__restrict__ in_counts,
                                                  u32 *__restrict__ out_counts,
-                                                 const u64 *__restrict__ in_parents,
                                                  u64 *__restrict__ parents) {
     static_assert(ROUND >= 1 && ROUND < WK, "collision round");
     constexpr u32 COLLISION_BITS = DIGITBITS - IN_BUCKET_BITS;
@@ -121,7 +98,6 @@ __global__ __launch_bounds__(256) void bb_round(const u32 *__restrict__ in,
     __shared__ u32 hashes[SELECT_CAPACITY * IN_WORDS];
     __shared__ u16 slots[ROUND == 4 ? 1 : SELECT_CAPACITY];
     __shared__ u16 next[SELECT_CAPACITY];
-    __shared__ uchar tails[ROUND == 1 ? SELECT_CAPACITY : 1];
     __shared__ uchar drop_hi[ROUND == 3 ? SELECT_CAPACITY : 1];
 
     const u32 part = blockIdx.x & (PARTS - 1);
@@ -136,44 +112,66 @@ __global__ __launch_bounds__(256) void bb_round(const u32 *__restrict__ in,
         selected = 0;
     __syncthreads();
 
+#ifdef EQ_PHASE_TIMING
+    const unsigned long long eq_t0 = clock64();
+#endif
+
     // Compact this partition into shared memory once; collision pairs then
     // reuse the staged hashes instead of issuing random global rereads.
-    for (u32 s = tid; s < n; s += blockDim.x) {
-        const u32 key = bb_input_get<ROUND, IN_WORDS>(in, base + s, 0) >> (32 - COLLISION_BITS);
+    // Every input layer is a 16-byte record, loaded with a single vector
+    // load that serves both the partition-key check and the staged data.
+    // Two slots per iteration keep two loads in flight (the phase is
+    // load-latency bound, not bandwidth bound).
+    auto stage = [&](const uint4 rec, const u32 s) {
+        const u32 key = rec.x >> (32 - COLLISION_BITS);
         if ((key >> KEY_BITS) != part)
-            continue;
+            return;
         const u32 pos = atomicAdd(&selected, 1);
         if (pos >= SELECT_CAPACITY)
-            continue;
+            return;
         if constexpr (ROUND < 4)
             slots[pos] = s;
-#pragma unroll
-        for (u32 w = 0; w < IN_WORDS; ++w)
-            hashes[pos * IN_WORDS + w] = bb_input_get<ROUND, IN_WORDS>(in, base + s, w);
         if constexpr (ROUND == 1) {
-            hashes[pos * IN_WORDS + 3] |= bb_leaf_get(in, base + s, 3) & 0xfffff;
-            tails[pos] = bb_leaf_get(in, base + s, 4) >> 28;
+            // Word 0's key bits cancel within a chain, so its top nibble is
+            // free to carry the 4 tail bits — their pair XOR then falls out
+            // of x[0] with no tails[] array.
+            hashes[pos * IN_WORDS] = (rec.x & 0x000fffffu) |
+                                     (bb_leaf_get(in, base + s, 4) & 0xf0000000u);
+            hashes[pos * IN_WORDS + 1] = rec.y;
+            hashes[pos * IN_WORDS + 2] = rec.z;
+            hashes[pos * IN_WORDS + 3] = rec.w;
         } else if constexpr (ROUND == 2) {
-            const u32 dropped = in_parents[base + s] >> 40;
-            hashes[pos * IN_WORDS] = (hashes[pos * IN_WORDS] & 0x001fffffu) |
-                                     ((dropped >> 13) << 21);
-            hashes[pos * IN_WORDS + IN_WORDS - 1] |= dropped & 0x1fff;
+            const u32 dropped = rec.w;
+            hashes[pos * IN_WORDS] = (rec.x & 0x001fffffu) | ((dropped >> 13) << 21);
+            hashes[pos * IN_WORDS + 1] = rec.y;
+            hashes[pos * IN_WORDS + 2] = rec.z | (dropped & 0x1fff);
         } else if constexpr (ROUND == 3) {
-            const u32 dropped = reinterpret_cast<const u64 *>(in)[(base + s) * 2 + 1] >> 39;
-            hashes[pos * IN_WORDS] = (hashes[pos * IN_WORDS] & 0x000fffffu) |
-                                     ((dropped & 0xfff) << 20);
-            hashes[pos * IN_WORDS + IN_WORDS - 1] |= (dropped >> 12) & 0xf;
+            const u32 dropped = u32(((u64(rec.w) << 32) | rec.z) >> 39);
+            hashes[pos * IN_WORDS] = (rec.x & 0x000fffffu) | ((dropped & 0xfff) << 20);
+            hashes[pos * IN_WORDS + 1] = rec.y | ((dropped >> 12) & 0xf);
             drop_hi[pos] = dropped >> 16;
         } else if constexpr (ROUND == 4) {
-            const u64 meta = u64(s) |
-                             (u64(in[(base + s) * 4 + 1] & 0xffffff) << 13);
-            hashes[pos * IN_WORDS] = (hashes[pos * IN_WORDS] & 0x00ffffffu) |
-                                     (u32(meta >> 29) << 24);
-            hashes[pos * IN_WORDS + 1] |= u32(meta) & 0x1fffffffu;
+            const u64 meta = u64(s) | (u64(rec.y & 0xffffff) << 13);
+            hashes[pos * IN_WORDS] = (rec.x & 0x00ffffffu) | (u32(meta >> 29) << 24);
+            hashes[pos * IN_WORDS + 1] = (rec.y & 0xe0000000u) | (u32(meta) & 0x1fffffffu);
         }
         next[pos] = (u16)atomicExch(&heads[key & KEY_MASK], pos);
+    };
+    for (u32 s = tid; s < n; s += 2 * blockDim.x) {
+        const uint4 recA = reinterpret_cast<const uint4 *>(in)[base + s];
+        const u32 sB = s + blockDim.x;
+        uint4 recB;
+        if (sB < n)
+            recB = reinterpret_cast<const uint4 *>(in)[base + sB];
+        stage(recA, s);
+        if (sB < n)
+            stage(recB, sB);
     }
     __syncthreads();
+
+#ifdef EQ_PHASE_TIMING
+    const unsigned long long eq_t1 = clock64();
+#endif
 
     const u32 selected_count = min(selected, SELECT_CAPACITY);
     for (u32 pos1 = tid; pos1 < selected_count; pos1 += blockDim.x) {
@@ -211,7 +209,7 @@ __global__ __launch_bounds__(256) void bb_round(const u32 *__restrict__ in,
             const u32 out_index = out_bucket * OUT_CAPACITY + out_slot;
             u32 dropped;
             if constexpr (ROUND == 1)
-                dropped = ((x[3] & 0xfffff) << 4) | (tails[pos0] ^ tails[pos1]);
+                dropped = ((x[3] & 0xfffff) << 4) | (x[0] >> 28);
             else if constexpr (ROUND == 2)
                 dropped = ((x[0] >> 21) << 13) | (x[IN_WORDS - 1] & 0x1fff);
             else if constexpr (ROUND == 3)
@@ -243,18 +241,35 @@ __global__ __launch_bounds__(256) void bb_round(const u32 *__restrict__ in,
             const u64 parent = u64(slot0) | (u64(slot1) << SLOT_BITS) |
                                (u64(bucket) << (2 * SLOT_BITS)) |
                                (u64(dropped) << META_SHIFT);
-            if constexpr (ROUND == 2 || ROUND == 3) {
+            if constexpr (ROUND == 1) {
+                // 16-byte record; word 3 carries the dropped bits so round 2
+                // never has to read the parent plane.
+                static_assert(OUT_WORDS == 3, "uint4 record");
+                reinterpret_cast<uint4 *>(out)[out_index] = make_uint4(
+                    values[0], values[1], values[2], dropped);
+                parents[out_index] = parent;
+            } else if constexpr (ROUND == 2 || ROUND == 3) {
                 static_assert(OUT_WORDS == 2, "interleaved record");
                 reinterpret_cast<uint4 *>(out)[out_index] = make_uint4(
                     values[0], values[1], u32(parent), u32(parent >> 32));
             } else {
-#pragma unroll
-                for (u32 w = 0; w < OUT_WORDS; ++w)
-                    bb_set<OUT_WORDS>(out, out_index, w, values[w]);
-                parents[out_index] = parent;
+                // Round 4: one record holds the final-layer word and the
+                // parent, so bb_final and expansion read a single plane.
+                static_assert(OUT_WORDS == 1, "uint4 record");
+                reinterpret_cast<uint4 *>(out)[out_index] = make_uint4(
+                    values[0], u32(parent), u32(parent >> 32), 0);
             }
         }
     }
+
+#ifdef EQ_PHASE_TIMING
+    __syncthreads();
+    if (tid == 0) {
+        atomicAdd(&eq_phase_cycles[ROUND][0], eq_t1 - eq_t0);
+        atomicAdd(&eq_phase_cycles[ROUND][1], (unsigned long long)(clock64() - eq_t1));
+        atomicAdd(&eq_phase_cycles[ROUND][2], 1ull);
+    }
+#endif
 }
 
 __device__ __forceinline__ void bb_order(u32 *indices, u32 half) {
@@ -295,10 +310,15 @@ __device__ __forceinline__ void bb_expand3(const u32 *leaves, const u64 *p1,
     bb_order(out, 4);
 }
 
+// Round-4 records are uint4 (value, parent lo, parent hi, 0).
+__device__ __forceinline__ u64 bb_r4_parent(const u32 *r4, u32 index) {
+    return (u64(r4[index * 4 + 2]) << 32) | r4[index * 4 + 1];
+}
+
 __device__ __forceinline__ void bb_expand4(const u32 *leaves, const u64 *p1,
                                            const u64 *p2, const u64 *p3,
-                                           const u64 *p4, u32 index, u32 *out) {
-    const u64 p = p4[index];
+                                           const u32 *r4, u32 index, u32 *out) {
+    const u64 p = bb_r4_parent(r4, index);
     const u32 bucket = (p >> 26) & (BB_MID_BUCKETS - 1);
     bb_expand3(leaves, p1, p2, p3, bucket * BB_MID_CAPACITY + (u32(p) & 0x1fff), out);
     bb_expand3(leaves, p1, p2, p3, bucket * BB_MID_CAPACITY + ((p >> 13) & 0x1fff), out + 8);
@@ -307,11 +327,11 @@ __device__ __forceinline__ void bb_expand4(const u32 *leaves, const u64 *p1,
 
 __device__ __forceinline__ void bb_candidate(equi *eq, const u32 *leaves,
                                               const u64 *p1, const u64 *p2,
-                                              const u64 *p3, const u64 *p4,
+                                              const u64 *p3, const u32 *r4,
                                               u32 index0, u32 index1) {
     u32 indices[PROOFSIZE];
-    bb_expand4(leaves, p1, p2, p3, p4, index0, indices);
-    bb_expand4(leaves, p1, p2, p3, p4, index1, indices + 16);
+    bb_expand4(leaves, p1, p2, p3, r4, index0, indices);
+    bb_expand4(leaves, p1, p2, p3, r4, index1, indices + 16);
     bb_order(indices, 16);
 
     // Do not let cyclic candidates occupy the small result buffer.
@@ -330,7 +350,7 @@ __global__ __launch_bounds__(256) void bb_final(equi *eq, const u32 *__restrict_
                                                  const u32 *__restrict__ counts,
                                                  const u32 *leaves,
                                                  const u64 *p1, const u64 *p2,
-                                                 const u64 *p3, const u64 *p4) {
+                                                 const u64 *p3) {
     constexpr u32 PARTS = 1u << PART_BITS;
     constexpr u32 KEY_BITS = BB_BUCKET_BITS - PART_BITS;
     constexpr u32 KEYS = 1u << KEY_BITS;
@@ -348,7 +368,7 @@ __global__ __launch_bounds__(256) void bb_final(equi *eq, const u32 *__restrict_
         heads[k] = ~0u;
     __syncthreads();
     for (u32 s = tid; s < n; s += blockDim.x) {
-        const u32 key = bb_get<1>(in, base + s, 0) >> 20;
+        const u32 key = in[(base + s) * 4] >> 20;
         if ((key >> KEY_BITS) == part)
             next[s] = (u16)atomicExch(&heads[key & KEY_MASK], s);
     }
@@ -356,15 +376,15 @@ __global__ __launch_bounds__(256) void bb_final(equi *eq, const u32 *__restrict_
 
     for (u32 s1 = tid; s1 < n; s1 += blockDim.x) {
         const u32 index1 = base + s1;
-        const u32 h10 = bb_get<1>(in, index1, 0);
+        const u32 h10 = in[index1 * 4];
         const u32 key = h10 >> 20;
         if ((key >> KEY_BITS) != part)
             continue;
         for (u32 s0 = next[s1]; s0 != 0xffffu; s0 = next[s0]) {
             const u32 index0 = base + s0;
-            if (bb_get<1>(in, index0, 0) == h10 &&
-                (((p4[index0] ^ p4[index1]) >> 39) & 0xffffff) == 0)
-                bb_candidate(eq, leaves, p1, p2, p3, p4, index0, index1);
+            if (in[index0 * 4] == h10 &&
+                (((bb_r4_parent(in, index0) ^ bb_r4_parent(in, index1)) >> 39) & 0xffffff) == 0)
+                bb_candidate(eq, leaves, p1, p2, p3, in, index0, index1);
         }
     }
 }

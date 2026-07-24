@@ -7,6 +7,20 @@
 #include "big_solver.cuh"
 #include "eqcuda1445.h"
 
+#ifdef EQ_PHASE_TIMING
+extern "C" void eq_dump_phase_timing(void) {
+    unsigned long long h[WK + 1][3];
+    cudaMemcpyFromSymbol(h, eq_phase_cycles, sizeof(h));
+    for (u32 r = 1; r < WK; ++r) {
+        if (!h[r][2])
+            continue;
+        printf("round %u: compact %.0f Mcyc, match %.0f Mcyc, %.1f%% compact (%llu blocks)\n",
+               r, h[r][0] / 1e6, h[r][1] / 1e6,
+               100.0 * h[r][0] / double(h[r][0] + h[r][1]), h[r][2]);
+    }
+}
+#endif
+
 verify_code equihash_verify_uncompressed(const char *header, u32 header_len, const proof indices) {
     if (duped(indices))
         return verify_code::POW_DUPLICATE;
@@ -31,7 +45,7 @@ extern "C" int equihash_verify_c(const char *header, u32 header_len, const unsig
 struct EqSolver {
     equi eq;
     equi *device_eq;
-    u32 *big0, *big1;
+    u32 *big0, *big1, *big2;
     u32 *counts0, *counts1;
     u64 *parents[WK - 1];
     u32 tpb;
@@ -40,7 +54,7 @@ struct EqSolver {
     proof *host_sols; // pinned; solution readback
 
     EqSolver(u32 nthreads)
-        : eq(nthreads), device_eq(nullptr), big0(nullptr), big1(nullptr),
+        : eq(nthreads), device_eq(nullptr), big0(nullptr), big1(nullptr), big2(nullptr),
           counts0(nullptr), counts1(nullptr), parents{},
           tpb(0), stream(nullptr), host_eq(nullptr), host_sols(nullptr) {
         eq.nslots = nullptr;
@@ -78,10 +92,9 @@ extern "C" EqSolver *eq_create(uint32_t nthreads) {
     CU_NEW(cudaMalloc((void **)&s->counts0, BB_BUCKETS * sizeof(u32)));
     CU_NEW(cudaMalloc((void **)&s->counts1, BB_MID_BUCKETS * sizeof(u32)));
     CU_NEW(cudaMalloc((void **)&s->parents[0], size_t(BB_MID_SLOTS) * sizeof(u64)));
-    // Round-2/3 parents share aligned records with their hashes; reuse the
-    // otherwise obsolete round-3 parent plane for the final hash layer.
-    CU_NEW(cudaMalloc((void **)&s->parents[2], size_t(BB_MID_SLOTS) * sizeof(u64)));
-    CU_NEW(cudaMalloc((void **)&s->parents[3], size_t(BB_SLOTS) * sizeof(u64)));
+    // Round-2/3 parents share aligned records with their hashes; round 4
+    // writes uint4 records (final word + parent) into big2.
+    CU_NEW(cudaMalloc((void **)&s->big2, size_t(BB_SLOTS) * 4 * sizeof(u32)));
     CU_NEW(cudaMalloc((void **)&s->eq.sols, MAXSOLS * sizeof(proof)));
     CU_NEW(cudaMalloc((void **)&s->device_eq, sizeof(equi)));
     CU_NEW(cudaStreamCreateWithFlags(&s->stream, cudaStreamNonBlocking));
@@ -97,6 +110,7 @@ extern "C" void eq_destroy(EqSolver *s) {
         cudaStreamSynchronize(s->stream);
     cudaFree(s->big0);
     cudaFree(s->big1);
+    cudaFree(s->big2);
     cudaFree(s->counts0);
     cudaFree(s->counts1);
     for (u32 r = 0; r < WK - 1; ++r)
@@ -130,30 +144,31 @@ extern "C" int eq_solve(EqSolver *s, const void *header, uint32_t header_len, ui
     bb_digitH<<<blocks, s->tpb, 0, s->stream>>>(s->device_eq, s->big0, s->counts0);
 
     CU_CHECK(cudaMemsetAsync(s->counts1, 0, BB_MID_BUCKETS * sizeof(u32), s->stream), return -2);
-    bb_round<1, 3, 12, BB_CAPACITY, 13, BB_MID_CAPACITY, 4, 3, 83, 1344>
-        <<<BB_BUCKETS * 8, s->tpb, 0, s->stream>>>(
-        s->big0, s->big1, s->counts0, s->counts1, nullptr, s->parents[0]);
+    // Round 1 runs 512-wide with 2 partition passes: same 32 warps/SM at
+    // half the partition scan traffic.
+    bb_round<1, 2, 12, BB_CAPACITY, 13, BB_MID_CAPACITY, 4, 3, 83, 2240, 512>
+        <<<BB_BUCKETS * 4, 512, 0, s->stream>>>(
+        s->big0, s->big1, s->counts0, s->counts1, s->parents[0]);
 
     CU_CHECK(cudaMemsetAsync(s->counts0, 0, BB_BUCKETS * sizeof(u32), s->stream), return -2);
-    bb_round<2, 2, 13, BB_MID_CAPACITY, 12, BB_CAPACITY, 3, 2, 60, 1408>
-        <<<BB_MID_BUCKETS * 4, s->tpb, 0, s->stream>>>(
-        s->big1, s->big0, s->counts1, s->counts0, s->parents[0], nullptr);
+    bb_round<2, 1, 13, BB_MID_CAPACITY, 12, BB_CAPACITY, 3, 2, 60, 2808, 512>
+        <<<BB_MID_BUCKETS * 2, 512, 0, s->stream>>>(
+        s->big1, s->big0, s->counts1, s->counts0, nullptr);
 
     CU_CHECK(cudaMemsetAsync(s->counts1, 0, BB_MID_BUCKETS * sizeof(u32), s->stream), return -2);
-    bb_round<3, 2, 12, BB_CAPACITY, 13, BB_MID_CAPACITY, 2, 2, 35, 2432>
-        <<<BB_BUCKETS * 4, s->tpb, 0, s->stream>>>(
-        s->big0, s->big1, s->counts0, s->counts1, nullptr, nullptr);
+    bb_round<3, 2, 12, BB_CAPACITY, 13, BB_MID_CAPACITY, 2, 2, 35, 2240, 512>
+        <<<BB_BUCKETS * 4, 512, 0, s->stream>>>(
+        s->big0, s->big1, s->counts0, s->counts1, nullptr);
 
     CU_CHECK(cudaMemsetAsync(s->counts0, 0, BB_BUCKETS * sizeof(u32), s->stream), return -2);
-    bb_round<4, 1, 13, BB_MID_CAPACITY, 12, BB_CAPACITY, 2, 1, 12, 2560>
-        <<<BB_MID_BUCKETS * 2, s->tpb, 0, s->stream>>>(
-        s->big1, reinterpret_cast<u32 *>(s->parents[2]),
-        s->counts1, s->counts0, nullptr, s->parents[3]);
+    bb_round<4, 1, 13, BB_MID_CAPACITY, 12, BB_CAPACITY, 2, 1, 12, 2816, 512>
+        <<<BB_MID_BUCKETS * 2, 512, 0, s->stream>>>(
+        s->big1, s->big2, s->counts1, s->counts0, nullptr);
 
     bb_final<0><<<BB_BUCKETS, s->tpb, 0, s->stream>>>(
-        s->device_eq, reinterpret_cast<const u32 *>(s->parents[2]), s->counts0, s->big0,
+        s->device_eq, s->big2, s->counts0, s->big0,
         s->parents[0], reinterpret_cast<const u64 *>(s->big0),
-        reinterpret_cast<const u64 *>(s->big1), s->parents[3]);
+        reinterpret_cast<const u64 *>(s->big1));
 
     CU_CHECK(cudaMemcpyAsync(s->host_eq, s->device_eq, sizeof(equi), cudaMemcpyDeviceToHost, s->stream), return -2);
     CU_CHECK(cudaMemcpyAsync(s->host_sols, s->eq.sols, MAXSOLS * sizeof(proof), cudaMemcpyDeviceToHost, s->stream), return -2);

@@ -11,12 +11,17 @@ package main
 import "C"
 import (
 	"fmt"
+	"runtime"
+	"sync"
 
 	"github.com/EXCCoin/gominer/cu"
 	"github.com/EXCCoin/gominer/nvml"
 )
 
-var nvmlInitialized = false
+var (
+	nvmlInitOnce sync.Once
+	nvmlInitErr  error
+)
 
 func backendName() string { return "CUDA" }
 
@@ -48,38 +53,44 @@ func backendBindThread(ordinal int) {
 	cu.SetDevice(cu.Device(ordinal))
 }
 
-// backendAutoInstances sizes the number of solver instances to free VRAM.
-func backendAutoInstances(ordinal int) int {
+// Concurrent instances hide each other's launch/readback bubbles; each holds
+// ~2.7 GB of buckets. Size the default to VRAM, capped where the GPU is
+// saturated anyway; -I overrides.
+func backendAutoInstances(ordinal int) (n int) {
+	n = 1
+	defer func() { _ = recover() }() // cu wrappers panic; keep the fallback
 	cu.SetDevice(cu.Device(ordinal))
-	free, _ := cu.MemGetInfo()
-	n := int((free - (1500 << 20)) / solverMemBytes)
-	if n < 1 {
-		n = 1
+	_, total := cu.MemGetInfo()
+	spare := int64(total) - 2<<30 // headroom for context + display
+	if v := int(spare / (2800 << 20)); v > n {
+		n = v
 	}
-	if n > 8 {
-		n = 8
+	if n > 4 {
+		n = 4
 	}
 	return n
 }
 
 func backendRelease(ordinal int) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	cu.SetDevice(cu.Device(ordinal))
 	cu.DeviceReset()
 }
 
 // backendDeviceStats returns (fan percent, temperature C), zeros if unknown.
 func backendDeviceStats(index int) (uint32, uint32) {
-	if !nvmlInitialized {
-		if err := nvml.Init(); err != nil {
-			minrLog.Debugf("NVML Init error: %v", err)
-			return 0, 0
-		}
-		nvmlInitialized = true
+	nvmlInitOnce.Do(func() { nvmlInitErr = nvml.Init() })
+	if nvmlInitErr != nil {
+		minrLog.Debugf("NVML Init error: %v", nvmlInitErr)
+		return 0, 0
 	}
 
-	dh, err := nvml.DeviceGetHandleByIndex(index)
+	busID := cu.DevicePCIBusID(index)
+	dh, err := nvml.DeviceGetHandleByPCIBusID(busID)
 	if err != nil {
-		minrLog.Debugf("NVML DeviceGetHandleByIndex error: %v", err)
+		minrLog.Debugf("NVML DeviceGetHandleByPCIBusID(%s) error: %v", busID, err)
 		return 0, 0
 	}
 
