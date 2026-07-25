@@ -10,10 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +29,8 @@ import (
 )
 
 var chainParams = chaincfg.MainNetParams()
+
+const reconnectRetryDelay = 5 * time.Second
 
 // ErrStratumStaleWork indicates that the work to send to the pool was stale.
 var ErrStratumStaleWork = fmt.Errorf("Stale work, throwing away")
@@ -274,6 +274,13 @@ func StratumConn(pool, user, pass, proxy, proxyUser, proxyPass, version string) 
 
 // Reconnect reconnects to a stratum server if the connection has been lost.
 func (s *Stratum) Reconnect() error {
+	s.Lock()
+	defer s.Unlock()
+
+	if s.Conn != nil {
+		_ = s.Conn.Close()
+	}
+
 	var conn net.Conn
 	var err error
 	if s.cfg.Proxy != "" {
@@ -282,9 +289,9 @@ func (s *Stratum) Reconnect() error {
 			Username: s.cfg.ProxyUser,
 			Password: s.cfg.ProxyPass,
 		}
-		conn, err = proxy.Dial("tcp", s.cfg.Pool)
+		conn, err = proxy.DialTimeout("tcp", s.cfg.Pool, reconnectRetryDelay)
 	} else {
-		conn, err = net.Dial("tcp", s.cfg.Pool)
+		conn, err = net.DialTimeout("tcp", s.cfg.Pool, reconnectRetryDelay)
 	}
 	if err != nil {
 		return err
@@ -293,20 +300,31 @@ func (s *Stratum) Reconnect() error {
 	s.Reader = bufio.NewReader(s.Conn)
 	err = s.Subscribe()
 	if err != nil {
-		return nil
+		_ = conn.Close()
+		return fmt.Errorf("subscribe: %w", err)
 	}
-	// Should NOT need this.
-	time.Sleep(5 * time.Second)
-	// XXX Do I really need to re-auth here?
 	err = s.Auth()
 	if err != nil {
-		return nil
+		_ = conn.Close()
+		return fmt.Errorf("authorize: %w", err)
 	}
 
 	// If we were able to reconnect, restart counter
 	s.Started = uint32(time.Now().Unix())
 
 	return nil
+}
+
+func (s *Stratum) reconnectUntilReady() {
+	for {
+		if err := s.Reconnect(); err != nil {
+			log.Errorf("Reconnect failed: %v. Retrying in %v.", err, reconnectRetryDelay)
+			time.Sleep(reconnectRetryDelay)
+			continue
+		}
+		log.Info("Reconnected.")
+		return
+	}
 }
 
 // Listen is the listener for the incoming messages from the stratum pool.
@@ -316,19 +334,8 @@ func (s *Stratum) Listen() {
 	for {
 		result, err := s.Reader.ReadString('\n')
 		if err != nil {
-			if err == io.EOF {
-				log.Error("Connection lost!  Reconnecting.")
-				err = s.Reconnect()
-				if err != nil {
-					log.Error(err)
-					log.Error("Reconnect failed.")
-					os.Exit(1)
-					return
-				}
-
-			} else {
-				log.Error(err)
-			}
+			log.Errorf("Connection lost: %v. Reconnecting.", err)
+			s.reconnectUntilReady()
 			continue
 		}
 
@@ -396,14 +403,7 @@ func (s *Stratum) handleStratumMsg(resp interface{}) {
 		time.Sleep(time.Duration(wait) * time.Second)
 		pool := nResp.Params[0] + ":" + nResp.Params[1]
 		s.cfg.Pool = pool
-		err = s.Reconnect()
-		if err != nil {
-			log.Error(err)
-			// XXX should just die at this point
-			// but we don't really have access to
-			// the channel to end everything.
-			return
-		}
+		s.reconnectUntilReady()
 
 	case "client.get_version":
 		log.Debug("get_version request received.")
@@ -840,16 +840,7 @@ func (s *Stratum) PrepWork() error {
 	atomic.StoreUint32(&s.latestJobTime, givenTs)
 
 	if s.Target == nil {
-		log.Errorf("No target set!  Reconnecting to pool.")
-		err = s.Reconnect()
-		if err != nil {
-			log.Error(err)
-			// XXX should just die at this point
-			// but we don't really have access to
-			// the channel to end everything.
-			return err
-		}
-		return nil
+		return errors.New("no target set")
 	}
 
 	w := work.NewWork(bh, s.Target, givenTs, uint32(time.Now().Unix()), false, s.PoolWork.JobID)

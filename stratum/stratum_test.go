@@ -1,9 +1,12 @@
 package stratum
 
 import (
+	"bufio"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestSubmitReplyMayOmitError(t *testing.T) {
@@ -40,5 +43,49 @@ func TestNotifySignalsWorkReady(t *testing.T) {
 	case <-s.WorkReady:
 		t.Fatal("duplicate notifications should coalesce")
 	default:
+	}
+}
+
+func TestReconnectImmediatelySubscribesAndAuthorizes(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	lines := make(chan []string, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		scanner := bufio.NewScanner(conn)
+		got := make([]string, 0, 2)
+		for len(got) < 2 && scanner.Scan() {
+			got = append(got, scanner.Text())
+		}
+		lines <- got
+	}()
+
+	s := &Stratum{ID: 1}
+	s.cfg = Config{Pool: listener.Addr().String(), User: "user", Pass: "pass", Version: "test"}
+	start := time.Now()
+	if err := s.Reconnect(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Conn.Close()
+	if elapsed := time.Since(start); elapsed >= 2*time.Second {
+		t.Fatalf("reconnect handshake took %v", elapsed)
+	}
+
+	select {
+	case got := <-lines:
+		if len(got) != 2 || !strings.Contains(got[0], `"method":"mining.subscribe"`) ||
+			!strings.Contains(got[1], `"method":"mining.authorize"`) {
+			t.Fatalf("unexpected reconnect handshake: %q", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reconnect handshake")
 	}
 }
