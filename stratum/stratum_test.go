@@ -46,7 +46,7 @@ func TestNotifySignalsWorkReady(t *testing.T) {
 	}
 }
 
-func TestReconnectImmediatelySubscribesAndAuthorizes(t *testing.T) {
+func TestReconnectWaitsForFreshWork(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -54,6 +54,7 @@ func TestReconnectImmediatelySubscribesAndAuthorizes(t *testing.T) {
 	defer listener.Close()
 
 	lines := make(chan []string, 1)
+	sendNotify := make(chan struct{})
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -65,19 +66,25 @@ func TestReconnectImmediatelySubscribesAndAuthorizes(t *testing.T) {
 		for len(got) < 2 && scanner.Scan() {
 			got = append(got, scanner.Text())
 		}
+		for _, response := range []string{
+			`{"id":1,"result":[[["mining.set_difficulty","1"],["mining.notify","session"]],"0000000000000000",12],"error":null}`,
+			`{"id":2,"result":true,"error":null}`,
+			`{"id":null,"method":"mining.set_difficulty","params":[1024]}`,
+		} {
+			_, _ = conn.Write([]byte(response + "\n"))
+		}
 		lines <- got
+		<-sendNotify
+		notify := `{"id":null,"method":"mining.notify","params":["job","` +
+			strings.Repeat("0", 64) + `","` + strings.Repeat("0", 188) +
+			`","",[],"01000000","1a12334a","00000000",true]}`
+		_, _ = conn.Write([]byte(notify + "\n"))
 	}()
 
-	s := &Stratum{ID: 1}
+	s := &Stratum{ID: 1, WorkReady: make(chan struct{}, 1)}
 	s.cfg = Config{Pool: listener.Addr().String(), User: "user", Pass: "pass", Version: "test"}
-	start := time.Now()
-	if err := s.Reconnect(); err != nil {
-		t.Fatal(err)
-	}
-	defer s.Conn.Close()
-	if elapsed := time.Since(start); elapsed >= 2*time.Second {
-		t.Fatalf("reconnect handshake took %v", elapsed)
-	}
+	done := make(chan error, 1)
+	go func() { done <- s.Reconnect() }()
 
 	select {
 	case got := <-lines:
@@ -87,5 +94,28 @@ func TestReconnectImmediatelySubscribesAndAuthorizes(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for reconnect handshake")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("reconnect returned before fresh work: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(sendNotify)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reconnect did not accept fresh work")
+	}
+	defer s.Conn.Close()
+	if !s.PoolWork.NewWork {
+		t.Fatal("fresh work was not marked ready")
+	}
+	select {
+	case <-s.WorkReady:
+	default:
+		t.Fatal("fresh work did not wake the miner")
 	}
 }

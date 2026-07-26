@@ -275,7 +275,6 @@ func StratumConn(pool, user, pass, proxy, proxyUser, proxyPass, version string) 
 // Reconnect reconnects to a stratum server if the connection has been lost.
 func (s *Stratum) Reconnect() error {
 	s.Lock()
-	defer s.Unlock()
 
 	if s.Conn != nil {
 		_ = s.Conn.Close()
@@ -294,24 +293,72 @@ func (s *Stratum) Reconnect() error {
 		conn, err = net.DialTimeout("tcp", s.cfg.Pool, reconnectRetryDelay)
 	}
 	if err != nil {
+		s.Unlock()
 		return err
 	}
 	s.Conn = conn
 	s.Reader = bufio.NewReader(s.Conn)
+	s.PoolWork.NewWork = false
+	atomic.StoreUint32(&s.latestJobTime, 0)
 	err = s.Subscribe()
 	if err != nil {
 		_ = conn.Close()
+		s.Unlock()
 		return fmt.Errorf("subscribe: %w", err)
 	}
 	err = s.Auth()
 	if err != nil {
 		_ = conn.Close()
+		s.Unlock()
 		return fmt.Errorf("authorize: %w", err)
 	}
+	s.Unlock()
 
-	// If we were able to reconnect, restart counter
+	if err := conn.SetReadDeadline(time.Now().Add(reconnectRetryDelay)); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	var subscribed, authorized bool
+	var notify *NotifyRes
+	for !subscribed || !authorized || notify == nil {
+		result, err := s.Reader.ReadString('\n')
+		if err != nil {
+			_ = conn.Close()
+			return fmt.Errorf("waiting for fresh work: %w", err)
+		}
+
+		log.Debug(strings.TrimSuffix(result, "\n"))
+		resp, err := s.Unmarshal([]byte(result))
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+		switch r := resp.(type) {
+		case *BasicReply:
+			if !r.Result {
+				s.handleResponse(resp)
+				_ = conn.Close()
+				return errors.New("authorization rejected")
+			}
+			authorized = true
+		case *SubscribeReply:
+			subscribed = true
+		case NotifyRes:
+			n := r
+			notify = &n
+			continue
+		}
+		s.handleResponse(resp)
+	}
+	s.handleResponse(*notify)
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		_ = conn.Close()
+		return err
+	}
+
+	s.Lock()
 	s.Started = uint32(time.Now().Unix())
-
+	s.Unlock()
 	return nil
 }
 
@@ -346,18 +393,22 @@ func (s *Stratum) Listen() {
 			continue
 		}
 
-		switch resp.(type) {
-		case *BasicReply:
-			s.handleBasicReply(resp)
-		case StratumMsg:
-			s.handleStratumMsg(resp)
-		case NotifyRes:
-			s.handleNotifyRes(resp)
-		case *SubscribeReply:
-			s.handleSubscribeReply(resp)
-		default:
-			log.Info("Unhandled message: ", result)
-		}
+		s.handleResponse(resp)
+	}
+}
+
+func (s *Stratum) handleResponse(resp interface{}) {
+	switch resp.(type) {
+	case *BasicReply:
+		s.handleBasicReply(resp)
+	case StratumMsg:
+		s.handleStratumMsg(resp)
+	case NotifyRes:
+		s.handleNotifyRes(resp)
+	case *SubscribeReply:
+		s.handleSubscribeReply(resp)
+	default:
+		log.Info("Unhandled message: ", resp)
 	}
 }
 
