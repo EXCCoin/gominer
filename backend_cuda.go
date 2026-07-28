@@ -71,12 +71,18 @@ func backendAutoInstances(ordinal int) (n int) {
 	return n
 }
 
-func backendRelease(ordinal int) {
+func backendRelease(ordinal int) (err error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("CUDA device reset failed: %v", recovered)
+		}
+	}()
 
 	cu.SetDevice(cu.Device(ordinal))
 	cu.DeviceReset()
+	return nil
 }
 
 // backendDeviceStats returns (fan percent, temperature C), zeros if unknown.

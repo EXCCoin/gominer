@@ -29,6 +29,7 @@ type Miner struct {
 	quit             chan struct{}
 	needsWorkRefresh chan struct{}
 	wg               sync.WaitGroup
+	stopOnce         sync.Once
 	pool             *stratum.Stratum
 }
 
@@ -214,15 +215,27 @@ func (m *Miner) printStatsThread() {
 	}
 }
 
-func (m *Miner) Run() {
+func (m *Miner) Run() error {
+	deviceResults := make(chan error, len(m.devices))
 	m.wg.Add(len(m.devices))
 
 	for _, d := range m.devices {
 		device := d
 		go func() {
-			device.Run()
-			device.Release()
-			m.wg.Done()
+			defer m.wg.Done()
+			err := device.Run()
+			if err != nil {
+				m.Stop()
+			}
+			if releaseErr := device.Release(); releaseErr != nil {
+				if err == nil {
+					err = releaseErr
+					m.Stop()
+				} else {
+					minrLog.Errorf("%v", releaseErr)
+				}
+			}
+			deviceResults <- err
 		}()
 	}
 
@@ -257,13 +270,21 @@ func (m *Miner) Run() {
 	go m.printStatsThread()
 
 	m.wg.Wait()
+	for range m.devices {
+		if err := <-deviceResults; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (m *Miner) Stop() {
-	close(m.quit)
-	for _, d := range m.devices {
-		d.Stop()
-	}
+	m.stopOnce.Do(func() {
+		close(m.quit)
+		for _, d := range m.devices {
+			d.Stop()
+		}
+	})
 }
 
 func (m *Miner) Status() (uint64, uint64, uint64, uint64, float64) {

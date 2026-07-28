@@ -15,6 +15,7 @@ import "C"
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/big"
 	"runtime"
@@ -93,7 +94,10 @@ type Device struct {
 	workDone chan WorkResult
 	started  uint32
 	quit     chan struct{}
+	stopOnce sync.Once
 }
+
+var errSolverFailed = errors.New("GPU solver failed")
 
 // eqWorker is one solver instance on a device. Each worker owns its own GPU
 // buffers and remembers the exact header it is solving so that concurrent
@@ -107,15 +111,10 @@ type eqWorker struct {
 	benchmark bool
 }
 
-func (d *Device) Run() {
-	err := d.runDevice()
-	if err != nil {
-		minrLog.Errorf("Error on device: %v", err)
-	}
-}
+func (d *Device) Run() error { return d.runDevice() }
 
 func (d *Device) Stop() {
-	close(d.quit)
+	d.stopOnce.Do(func() { close(d.quit) })
 }
 
 func (d *Device) SetWork(w *work.Work) {
@@ -202,9 +201,7 @@ func (d *Device) Status() (float64, uint32, uint32) {
 	return averageHashRate, fanPercent, temperature
 }
 
-func (d *Device) Release() {
-	backendRelease(d.index)
-}
+func (d *Device) Release() error { return backendRelease(d.index) }
 
 // This is pretty hacky/proof-of-concepty
 func (d *Device) fanControl() {
@@ -412,7 +409,7 @@ func (w *eqWorker) handleSolution(solution []byte) {
 }
 
 // runWorker owns one solver instance and grinds nonces on it until shutdown.
-func (d *Device) runWorker(id int) {
+func (d *Device) runWorker(id int) error {
 	// A dedicated OS thread keeps the GPU context binding stable.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -420,8 +417,7 @@ func (d *Device) runWorker(id int) {
 	backendBindThread(d.index)
 	solver := C.eq_create(C.uint32_t(d.workSize))
 	if solver == nil {
-		minrLog.Errorf("DEV #%d: failed to create solver instance %d", d.index, id)
-		return
+		return fmt.Errorf("DEV #%d: failed to create solver instance %d", d.index, id)
 	}
 	defer C.eq_destroy(solver)
 
@@ -434,7 +430,7 @@ func (d *Device) runWorker(id int) {
 	for {
 		cw, ok := d.waitForWork()
 		if !ok {
-			return
+			return nil
 		}
 
 		hdr := cw.BlockHeader
@@ -472,26 +468,34 @@ func (d *Device) runWorker(id int) {
 		n := C.eqSolveGo(solver, unsafe.Pointer(&input[0]), C.uint32_t(len(input)),
 			C.uint32_t(hdr.Nonce), ptr)
 		if n < 0 {
-			minrLog.Errorf("DEV #%d: solver instance %d CUDA error %d", d.index, id, int(n))
-			return
+			err := fmt.Errorf("%w: DEV #%d solver instance %d returned %d",
+				errSolverFailed, d.index, id, int(n))
+			minrLog.Errorf("%v", err)
+			return err
 		}
 		atomic.AddUint64(&d.allDiffOneShares, uint64(n))
 	}
 }
 
+func runWorkers(count int, stop func(), worker func(int) error) error {
+	results := make(chan error, count)
+	for id := 0; id < count; id++ {
+		go func() { results <- worker(id) }()
+	}
+
+	var firstErr error
+	for range count {
+		if err := <-results; err != nil && firstErr == nil {
+			firstErr = err
+			stop()
+		}
+	}
+	return firstErr
+}
+
 func (d *Device) runDevice() error {
 	minrLog.Infof("Started GPU #%d: %s (%d solver instances)", d.index, d.deviceName, d.instances)
-
-	var wg sync.WaitGroup
-	for i := 0; i < d.instances; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			d.runWorker(id)
-		}(i)
-	}
-	wg.Wait()
-	return nil
+	return runWorkers(d.instances, d.Stop, d.runWorker)
 }
 
 // ListDevices prints a list of capable GPUs present.

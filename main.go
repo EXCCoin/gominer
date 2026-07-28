@@ -1,6 +1,8 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -86,15 +88,17 @@ func gominerMain() error {
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
+	defer signal.Stop(c)
 	go func() {
-		<-c
-		mainLog.Warn("Got Control+C, exiting...")
-		m.Stop()
+		select {
+		case <-c:
+			mainLog.Warn("Got Control+C, exiting...")
+			m.Stop()
+		case <-m.quit:
+		}
 	}()
 
-	m.Run()
-
-	return nil
+	return m.Run()
 }
 
 func main() {
@@ -102,7 +106,17 @@ func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 
 	// Work around defer not working after os.Exit()
-	if err := gominerMain(); err != nil {
+	err := gominerMain()
+	if errors.Is(err, errSolverFailed) {
+		fmt.Fprintf(os.Stderr, "%v; restarting clean process in 10 seconds\n", err)
+		time.Sleep(10 * time.Second)
+		if restartErr := restartProcess(); restartErr == nil {
+			return
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to restart gominer: %v\n", restartErr)
+		}
+	}
+	if err != nil {
 		os.Exit(1)
 	}
 }

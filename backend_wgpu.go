@@ -54,7 +54,7 @@ func backendAutoInstances(ordinal int) int {
 	return 1
 }
 
-func backendRelease(ordinal int) {}
+func backendRelease(ordinal int) error { return nil }
 
 // backendDeviceStats returns (fan percent, temperature C); not available
 // through wgpu, so devices simply show no fan/temp telemetry.
