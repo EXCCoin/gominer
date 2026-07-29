@@ -6,8 +6,7 @@ gominer is an application for performing Proof-of-Work (PoW) mining on the Excha
 - **wgpu** (`./build-wgpu.sh`) — portable: AMD, NVIDIA, and Intel GPUs via
   Vulkan (Metal/DX12 also supported by the underlying library). No CUDA
   toolkit or vendor SDK needed — just a Vulkan-capable driver at runtime.
-  It is a compatibility backend and is currently much slower than the
-  optimized CUDA solver; prefer CUDA on NVIDIA.
+  Prefer the optimized CUDA solver on NVIDIA.
 
 ## Downloading
 Linux and Windows 64-bit binaries may be downloaded from [https://github.com/EXCCoin/excc-binaries/releases/latest](https://github.com/EXCCoin/excc-binaries/releases/latest)
@@ -95,15 +94,16 @@ CARGO_BUILD_TARGET=aarch64-unknown-linux-gnu ./build-wgpu.sh
 ```
 
 On a native AArch64 Linux host, use `./build-wgpu.sh` normally. At runtime the
-portable backend needs a Vulkan driver that exposes the GPU; ROCm and CUDA are
-not required. Start a new AMD adapter with `-I 1`, then benchmark before raising
-the instance count.
+portable backend needs a Vulkan driver that exposes the GPU with 1024 compute
+invocations and 64 KiB workgroup storage; ROCm and CUDA are not required. Start
+a new AMD adapter with `-I 1`, then benchmark before raising the instance count.
 
 ## Tuning
-- `-I/--instances N` — concurrent solver instances per GPU, ~2.7GB GPU memory
+- `-I/--instances N` — concurrent solver instances per GPU, ~2.2GB GPU memory
   each (CUDA default scales with VRAM, up to 4; wgpu default stays 1).
 - `-W/--worksize N` — solver thread count per instance (default 2^20).
 
 Reference: an RTX 5090 does ~248 Sol/s with the CUDA solver defaults. The wgpu
-solver is not yet performance-equivalent. Rates are reported in Sol/s
-(Equihash solutions per second), the unit pools use.
+solver reaches ~47.1 Sol/s on a Ryzen AI MAX+ 395 / Radeon 8060S with RADV and
+`-I 1`. Rates are reported in Sol/s (Equihash solutions per second), the unit
+pools use.

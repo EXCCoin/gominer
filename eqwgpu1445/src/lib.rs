@@ -6,9 +6,10 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::sync::OnceLock;
 
-const NBUCKETS: u64 = 1 << 20;
-const NSLOTS: u64 = 64;
-const SLOT_WORDS: u64 = 5;
+const BIG_BUCKETS: u64 = 1 << 12;
+const BIG_CAPACITY: u64 = 8688;
+const MID_BUCKETS: u64 = 1 << 13;
+const MID_CAPACITY: u64 = 4592;
 const MAXSOLS: usize = 10;
 const PROOFSIZE: usize = 32;
 const HEADER_LEN: usize = 180; // algo v1 Equihash input
@@ -17,8 +18,8 @@ const COMPRESSED_SOL_SIZE: usize = 100;
 const WORKGROUP: u32 = 256;
 const DEFAULT_NTHREADS: u32 = 1 << 20;
 
-// heap word count: layer offset (max 2) + all slots + one full slot of slack
-const HEAP_WORDS: u64 = NBUCKETS * NSLOTS * SLOT_WORDS + 8;
+const BIG_SLOTS: u64 = BIG_BUCKETS * BIG_CAPACITY;
+const MID_SLOTS: u64 = MID_BUCKETS * MID_CAPACITY;
 
 // ---------------- blake2b host side (u64 native) ----------------
 
@@ -162,12 +163,12 @@ thread_local! {
 pub struct EqSolver {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    pipelines: Vec<wgpu::ComputePipeline>, // digitH, digitR r=1..4, digitK
+    pipelines: Vec<(wgpu::ComputePipeline, u32)>,
     bind_group: wgpu::BindGroup,
     params_buf: wgpu::Buffer,
+    counts: [wgpu::Buffer; 5],
     sols_buf: wgpu::Buffer,
     staging_buf: wgpu::Buffer,
-    workgroups: u32,
 }
 
 const SOLS_BYTES: u64 = 4 + (MAXSOLS * PROOFSIZE * 4) as u64;
@@ -193,7 +194,7 @@ fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
 
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("solver"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("solver.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(include_str!("big_solver.wgsl").into()),
     });
 
     let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
@@ -214,6 +215,13 @@ fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
             storage(2, false),
             storage(3, false),
             storage(4, false),
+            storage(5, false),
+            storage(6, false),
+            storage(7, false),
+            storage(8, false),
+            storage(9, false),
+            storage(10, false),
+            storage(11, false),
         ],
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -232,9 +240,18 @@ fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
     };
     use wgpu::BufferUsages as U;
     let params_buf = buf("params", 29 * 4, U::STORAGE | U::COPY_DST);
-    let heap0 = buf("heap0", HEAP_WORDS * 4, U::STORAGE);
-    let heap1 = buf("heap1", HEAP_WORDS * 4, U::STORAGE);
-    let nslots = buf("nslots", 2 * NBUCKETS * 4, U::STORAGE);
+    let big0 = buf("big0", BIG_SLOTS * 4 * 4, U::STORAGE);
+    let big1 = buf("big1", MID_SLOTS * 4 * 4, U::STORAGE);
+    let big2 = buf("big2", BIG_SLOTS * 4 * 4, U::STORAGE);
+    let leaves = buf("leaves", BIG_SLOTS * 4, U::STORAGE);
+    let parents1 = buf("parents1", MID_SLOTS * 2 * 4, U::STORAGE);
+    let counts = [
+        buf("counts0", BIG_BUCKETS * 4, U::STORAGE | U::COPY_DST),
+        buf("counts1", MID_BUCKETS * 4, U::STORAGE | U::COPY_DST),
+        buf("counts2", BIG_BUCKETS * 4, U::STORAGE | U::COPY_DST),
+        buf("counts3", MID_BUCKETS * 4, U::STORAGE | U::COPY_DST),
+        buf("counts4", BIG_BUCKETS * 4, U::STORAGE | U::COPY_DST),
+    ];
     let sols_buf = buf("sols", SOLS_BYTES, U::STORAGE | U::COPY_DST | U::COPY_SRC);
     let staging_buf = buf("staging", SOLS_BYTES, U::MAP_READ | U::COPY_DST);
 
@@ -243,10 +260,17 @@ fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
         layout: &bgl,
         entries: &[
             wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: heap0.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 2, resource: heap1.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 3, resource: nslots.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 4, resource: sols_buf.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: big0.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: big1.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: big2.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 4, resource: leaves.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 5, resource: parents1.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 6, resource: counts[0].as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 7, resource: counts[1].as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 8, resource: counts[2].as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 9, resource: counts[3].as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 10, resource: counts[4].as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 11, resource: sols_buf.as_entire_binding() },
         ],
     });
 
@@ -268,11 +292,11 @@ fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
             cache: None,
         })
     };
-    let mut pipelines = vec![mk_pipeline("digitH", None)];
+    let mut pipelines = vec![(mk_pipeline("digitH", None), nthreads / WORKGROUP)];
     for r in 1..=4 {
-        pipelines.push(mk_pipeline("digitR", Some(r)));
+        pipelines.push((mk_pipeline("digitR", Some(r)), (BIG_BUCKETS * 4) as u32));
     }
-    pipelines.push(mk_pipeline("digitK", None));
+    pipelines.push((mk_pipeline("digitK", None), (BIG_BUCKETS * 4) as u32));
 
     Ok(EqSolver {
         device,
@@ -280,9 +304,9 @@ fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
         pipelines,
         bind_group,
         params_buf,
+        counts,
         sols_buf,
         staging_buf,
-        workgroups: nthreads / WORKGROUP,
     })
 }
 
@@ -311,12 +335,15 @@ fn solve(
     s.queue.write_buffer(&s.sols_buf, 0, &[0u8; 4]); // reset nsols
 
     let mut encoder = s.device.create_command_encoder(&Default::default());
+    for count in &s.counts {
+        encoder.clear_buffer(count, 0, None);
+    }
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_bind_group(0, &s.bind_group, &[]);
-        for p in &s.pipelines {
-            pass.set_pipeline(p);
-            pass.dispatch_workgroups(s.workgroups, 1, 1);
+        for (pipeline, workgroups) in &s.pipelines {
+            pass.set_pipeline(pipeline);
+            pass.dispatch_workgroups(*workgroups, 1, 1);
         }
     }
     encoder.copy_buffer_to_buffer(&s.sols_buf, 0, &s.staging_buf, 0, SOLS_BYTES);
@@ -449,7 +476,7 @@ mod tests {
 
     #[test]
     fn shader_validates_and_compiles_to_spirv() {
-        let module = wgpu::naga::front::wgsl::parse_str(include_str!("solver.wgsl"))
+        let module = wgpu::naga::front::wgsl::parse_str(include_str!("big_solver.wgsl"))
             .expect("parse solver WGSL");
         let info = wgpu::naga::valid::Validator::new(
             wgpu::naga::valid::ValidationFlags::all(),
@@ -479,8 +506,13 @@ mod tests {
                 shader_stage: wgpu::naga::ShaderStage::Compute,
                 entry_point: entry_point.to_string(),
             };
-            wgpu::naga::back::spv::write_vec(&module, &info, &Default::default(), Some(&pipeline))
-                .unwrap_or_else(|e| panic!("compile {entry_point} to SPIR-V: {e}"));
+            wgpu::naga::back::spv::write_vec(
+                &module,
+                &info,
+                &Default::default(),
+                Some(&pipeline),
+            )
+            .unwrap_or_else(|e| panic!("compile {entry_point} to SPIR-V: {e}"));
         }
     }
 

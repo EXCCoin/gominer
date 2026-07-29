@@ -92,7 +92,7 @@ type config struct {
 	AutocalibrateInts []int
 	Devices           string `short:"D" long:"devices" description:"Single device ID or a comma separated list of device IDs to use."`
 	DeviceIDs         []int
-	Instances         int    `short:"I" long:"instances" description:"Concurrent solver instances per device (default scales with VRAM, ~2.7GB each, up to 4)."`
+	Instances         int    `short:"I" long:"instances" description:"Concurrent solver instances per device (~2.2GB GPU memory each; backend-specific default)."`
 	Intensity         string `short:"i" long:"intensity" description:"Intensities (the work size is 2^intensity) per device. Single global value or a comma separated list."`
 	IntensityInts     []int
 	TempTarget        string `short:"t" long:"temptarget" description:"Target temperature in Celsius to maintain via automatic fan control. (Requires --experimental flag)"`

@@ -49,7 +49,7 @@ func backendBindThread(ordinal int) {
 }
 
 func backendAutoInstances(ordinal int) int {
-	// One instance is the safe portable default (~2.7GB). Raise it only after
+	// One instance is the safe portable default (~2.2GB). Raise it only after
 	// benchmarking the specific adapter with --instances.
 	return 1
 }
