@@ -182,6 +182,12 @@ var<workgroup> selected: atomic<u32>;
 var<workgroup> links: array<u32, 2816>;
 var<workgroup> staged_hashes: array<u32, 11264>;
 
+// digitK does not stage hashes, so it can use the full 1024-head table even
+// in compact kernels. This halves its bucket scans without exceeding 16 KiB.
+var<workgroup> k_heads: array<atomic<u32>, 1024u>;
+var<workgroup> k_selected: atomic<u32>;
+var<workgroup> k_links: array<u32, 2240>;
+
 fn staged_hash(pos: u32) -> vec4<u32> {
     let o = pos * 4u;
     return vec4<u32>(staged_hashes[o], staged_hashes[o + 1u],
@@ -294,8 +300,9 @@ fn digitR(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index
     let big_round = r == 1u || r == 3u;
     let part_bits = select(1u, 2u, big_round);
     let part_mask = (1u << part_bits) - 1u;
-    let part = wid.x & part_mask;
-    let bucket = wid.x >> part_bits;
+    let group = wid.x + wid.y * 32768u;
+    let part = group & part_mask;
+    let bucket = group >> part_bits;
     let input_capacity = select(MID_CAPACITY, BIG_CAPACITY, big_round);
     let select_capacity = select(2816u, 2240u, big_round);
     let n = round_count(r, bucket);
@@ -408,35 +415,38 @@ fn candidate(index0: u32, index1: u32) {
 
 @compute @workgroup_size(1024)
 fn digitK(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) tid: u32) {
-    let part = wid.x & 3u;
-    let bucket = wid.x >> 2u;
+    let group = wid.x + wid.y * 32768u;
+    let part = group & 3u;
+    let bucket = group >> 2u;
     let n = min(atomicLoad(&counts4[bucket]), BIG_CAPACITY);
     let base = bucket * BIG_CAPACITY;
 
-    atomicStore(&heads[tid], 0xffffffffu);
-    if (tid == 0u) { atomicStore(&selected, 0u); }
+    for (var head = tid; head < 1024u; head += 1024u) {
+        atomicStore(&k_heads[head], 0xffffffffu);
+    }
+    if (tid == 0u) { atomicStore(&k_selected, 0u); }
     workgroupBarrier();
 
     for (var slot = tid; slot < n; slot += 1024u) {
         let key = big2[base + slot].x >> 20u;
-        if ((key >> 10u) != part) { continue; }
-        let pos = atomicAdd(&selected, 1u);
-        if (pos >= 2240u) { continue; }
-        let previous = atomicExchange(&heads[key & 1023u], pos);
-        links[pos] = (slot << 12u) | (previous & LINK_NIL);
+        if ((key >> 10) != part) { continue; }
+        let pos = atomicAdd(&k_selected, 1u);
+        if (pos >= 2240) { continue; }
+        let previous = atomicExchange(&k_heads[key & 1023], pos);
+        k_links[pos] = (slot << 12u) | (previous & LINK_NIL);
     }
     workgroupBarrier();
 
-    let selected_count = min(atomicLoad(&selected), 2240u);
+    let selected_count = min(atomicLoad(&k_selected), 2240u);
     for (var pos1 = tid; pos1 < selected_count; pos1 += 1024u) {
-        let link1 = links[pos1];
+        let link1 = k_links[pos1];
         let slot1 = link1 >> 12u;
         let index1 = base + slot1;
         let rec1 = big2[index1];
         var pos0 = link1 & LINK_NIL;
         loop {
             if (pos0 == LINK_NIL) { break; }
-            let link0 = links[pos0];
+            let link0 = k_links[pos0];
             let slot0 = link0 >> 12u;
             let index0 = base + slot0;
             let rec0 = big2[index0];

@@ -1,3 +1,5 @@
+//go:build !wgpu && !hip
+
 package nvml
 
 /*

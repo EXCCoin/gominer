@@ -12,5 +12,8 @@ crate-type = ["staticlib"]
 wgpu = "22"
 pollster = "0.3"
 
+[dev-dependencies]
+naga = { version = "22.1.0", features = ["msl-out", "spv-out", "wgsl-in"] }
+
 [profile.release]
 lto = true

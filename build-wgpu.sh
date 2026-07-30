@@ -31,8 +31,16 @@ esac
 (cd eqwgpu1445 && cargo "${CARGO_ARGS[@]}")
 cp "${RUST_LIB_DIR}/libeqwgpu1445.a" .
 
-# Content hash forces a Go relink when the solver library changes.
-LIBHASH="$(sha256sum libeqwgpu1445.a | cut -c1-12)"
+# Content hash forces a Go relink when the solver library changes. GNU/Linux
+# normally provides sha256sum; macOS provides shasum.
+if command -v sha256sum >/dev/null; then
+    LIBHASH="$(sha256sum libeqwgpu1445.a | cut -c1-12)"
+elif command -v shasum >/dev/null; then
+    LIBHASH="$(shasum -a 256 libeqwgpu1445.a | cut -c1-12)"
+else
+    echo "neither sha256sum nor shasum was found" >&2
+    exit 1
+fi
 
 OUTPUT="${OUTPUT:-gominer-wgpu}"
 go build -trimpath -tags wgpu -o "${OUTPUT}" \

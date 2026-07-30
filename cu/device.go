@@ -1,3 +1,5 @@
+//go:build !wgpu && !hip
+
 package cu
 
 // This file implements the minimal CUDA device management gominer needs.

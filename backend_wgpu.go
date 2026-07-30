@@ -8,6 +8,7 @@ package main
 
 /*
 #cgo LDFLAGS: -L. -leqwgpu1445 -ldl -lpthread -lm
+#cgo darwin LDFLAGS: -framework Metal -framework QuartzCore
 #include <stdint.h>
 extern uint32_t eq_adapter_count();
 extern int eq_adapter_name(uint32_t index, char *buf, uint32_t len);
