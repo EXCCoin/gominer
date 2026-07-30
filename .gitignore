@@ -42,6 +42,7 @@ obj/
 *.pdb
 .*
 gominer-wgpu
+/gominer-hip
 eqwgpu1445/target/
 
 # Runtime/benchmark artifacts

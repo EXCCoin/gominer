@@ -1,4 +1,4 @@
-//go:build !wgpu
+//go:build !wgpu && !hip
 
 package main
 
@@ -54,7 +54,7 @@ func backendBindThread(ordinal int) {
 }
 
 // Concurrent instances hide each other's launch/readback bubbles; each holds
-// ~2.7 GB of buckets. Size the default to VRAM, capped where the GPU is
+// ~3.0 GB of buckets. Size the default to VRAM, capped where the GPU is
 // saturated anyway; -I overrides.
 func backendAutoInstances(ordinal int) (n int) {
 	n = 1
@@ -62,7 +62,7 @@ func backendAutoInstances(ordinal int) (n int) {
 	cu.SetDevice(cu.Device(ordinal))
 	_, total := cu.MemGetInfo()
 	spare := int64(total) - 2<<30 // headroom for context + display
-	if v := int(spare / (2800 << 20)); v > n {
+	if v := int(spare / (3200 << 20)); v > n {
 		n = v
 	}
 	if n > 4 {
