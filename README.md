@@ -83,6 +83,11 @@ CUDA_HOME=/path/to/cuda ./build.sh        # build
 CUDA_HOME=/path/to/cuda ./build.sh test   # build + verify GPU solutions on the CPU
 ```
 
+`build.sh` produces one `./gominer` fat binary. It contains native CUDA code
+for Turing through Blackwell and selects the tuned sm86 or modern solver path
+at runtime. The unified build at commit `5620d62` verified 42/42 generated
+solutions on RTX 3050 Ti, RTX 4090, and RTX 5090 GPUs.
+
 ## Building the native AMD variant
 ```
 # needs ROCm HIP, no CUDA:
@@ -151,8 +156,9 @@ they should not be inferred from the GPU model.
 | --- | --- | --- | --- | --- | ---: | --- |
 | 2026-07-30 | Apple M4 Max, 16 cores (12P + 4E), 128 GB | Apple M4 Max, 40 cores | macOS 26.4.1, Metal, wgpu 22.1 | `-I 1 -W 1048576` | 52–55 Sol/s | Local sustained range; controlled 100-nonce solver test: 54.665 Sol/s. AC power with Automatic or High Power mode is required for a representative run. |
 | Not recorded | AMD Ryzen AI MAX+ 395, memory not recorded | Radeon 8060S | Linux/driver not recorded, Vulkan/RADV, wgpu | `-I 1` | 47.1 Sol/s | Project measurement. Native HIP tuning uses `-I 1 -W 5592320`; its result still needs recording. |
-| Not recorded | Not recorded | NVIDIA GeForce RTX 4090 | OS/driver not recorded, CUDA | Defaults | ~170 Sol/s | Project measurement; host and run details still need recording. |
-| Not recorded | Not recorded | NVIDIA GeForce RTX 5090 | OS/driver not recorded, CUDA | Defaults | ~290 Sol/s | Project measurement; host and run details still need recording. |
+| 2026-07-30 | Intel Core i9-13900HK, 32 GiB | NVIDIA GeForce RTX 3050 Ti Laptop GPU | Gentoo Linux, NVIDIA 595.71.05, CUDA sm86 | `5620d62`, `-B -I 1`, 30 s, 35 W firmware limit | 18.0 Sol/s | Exact unified artifact; 42/42 solutions verified. The 4 GiB GPU requires one solver instance. |
+| 2026-07-30 | AMD EPYC 9654 host, 1 TiB | NVIDIA GeForce RTX 4090 | Gentoo Linux, NVIDIA 595.71.05, CUDA sm89 | `5620d62`, `-B -I 4`, 30 s | 208.9 Sol/s | Exact unified artifact; 42/42 solutions verified. A longer mining sample ranged from 208.8 to 212.2 Sol/s. |
+| 2026-07-30 | AMD Ryzen 9 9950X3D, 128 GiB | NVIDIA GeForce RTX 5090 | Fedora 44, NVIDIA 610.43.03, CUDA 13.3 sm120 | `5620d62`, `-B -I 4`, 60 s | 299.4 Sol/s | Exact unified artifact (299.3 Sol/s at 30 s); 42/42 solutions verified. |
 
 For each new result, record the date, CPU and memory, exact GPU/compute-unit
 count, OS and driver, backend/API, git commit, power mode, instance/work-size
