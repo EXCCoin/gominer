@@ -1,5 +1,18 @@
 #include "eqcuda1445/eqcuda1445.h"
+#if defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_runtime.h>
+#define cudaDeviceProp hipDeviceProp_t
+#define cudaError_t hipError_t
+#define cudaSuccess hipSuccess
+#define cudaSetDevice hipSetDevice
+#define cudaGetDeviceProperties hipGetDeviceProperties
+#define cudaGetDeviceCount hipGetDeviceCount
+#define cudaGetErrorString hipGetErrorString
+#define GPU_RUNTIME_NAME "HIP"
+#else
 #include <cuda_runtime.h>
+#define GPU_RUNTIME_NAME "CUDA"
+#endif
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -49,11 +62,11 @@ int main() {
     int count = 0;
     cudaError_t err = cudaGetDeviceCount(&count);
     if (err != cudaSuccess) {
-        printf("CUDA device enumeration failed: %s\n", cudaGetErrorString(err));
+        printf("%s device enumeration failed: %s\n", GPU_RUNTIME_NAME, cudaGetErrorString(err));
         return 1;
     }
     if (count < 1) {
-        printf("No CUDA devices found\n");
+        printf("No %s devices found\n", GPU_RUNTIME_NAME);
         return 1;
     }
 

@@ -17,7 +17,6 @@ typedef uint64_t u64;
 static __device__ __forceinline__ uint2 operator^ (uint2 a, uint2 b) {
   return make_uint2(a.x ^ b.x, a.y ^ b.y);
 }
-
 // uint2 ROR/ROL methods
 __device__ __forceinline__ uint2 ROR2(const uint2 a, const int offset) {
   uint2 result;
@@ -95,6 +94,18 @@ __device__ __forceinline__ static void G(const int r, const int i, u64 &a, u64 &
   ((uint2*)&b)[0] = ROR2( ((uint2*)&b)[0] ^ ((uint2*)&c)[0], 63U);
 }
 
+__device__ __forceinline__ static void Gxy(u64 &a, u64 &b, u64 &c, u64 &d,
+                                            u64 x, u64 y) {
+  a = a + b + x;
+  ((uint2*)&d)[0] = SWAPUINT2(((uint2*)&d)[0] ^ ((uint2*)&a)[0]);
+  c = c + d;
+  ((uint2*)&b)[0] = ROR24(((uint2*)&b)[0] ^ ((uint2*)&c)[0]);
+  a = a + b + y;
+  ((uint2*)&d)[0] = ROR16(((uint2*)&d)[0] ^ ((uint2*)&a)[0]);
+  c = c + d;
+  ((uint2*)&b)[0] = ROR2(((uint2*)&b)[0] ^ ((uint2*)&c)[0], 63U);
+}
+
 #define ROUND(r) \
   G(r, 0, v[0], v[4], v[ 8], v[12], m); \
   G(r, 1, v[1], v[5], v[ 9], v[13], m); \
@@ -111,7 +122,8 @@ __device__ __forceinline__ static void G(const int r, const int i, u64 &a, u64 &
 struct blake2b_pre {
   u64 h[8];
   u64 m0, m1, m2, m3, m4, m5, m6lo;
-  u64 t; // counter + buflen + sizeof(idx)
+  u64 v3base; // h3 + h7 + low message word 6
+  u64 r0[12]; // first three index-independent columns of round 0
 };
 
 __device__ __forceinline__ void blake2b_precompute(const blake2b_state *state, blake2b_pre *pre) {
@@ -126,7 +138,24 @@ __device__ __forceinline__ void blake2b_precompute(const blake2b_state *state, b
   pre->m4 = d_data[4];
   pre->m5 = d_data[5];
   pre->m6lo = d_data[6] & 0xffffffffULL;
-  pre->t = state->counter + state->buflen + sizeof(u32);
+  const u64 t = state->counter + state->buflen + sizeof(u32);
+  pre->v3base = pre->h[3] + pre->h[7] + pre->m6lo;
+
+  pre->r0[0] = pre->h[0];
+  pre->r0[1] = pre->h[4];
+  pre->r0[2] = 0x6a09e667f3bcc908ULL;
+  pre->r0[3] = 0x510e527fade682d1ULL ^ t;
+  Gxy(pre->r0[0], pre->r0[1], pre->r0[2], pre->r0[3], pre->m0, pre->m1);
+  pre->r0[4] = pre->h[1];
+  pre->r0[5] = pre->h[5];
+  pre->r0[6] = 0xbb67ae8584caa73bULL;
+  pre->r0[7] = 0x9b05688c2b3e6c1fULL;
+  Gxy(pre->r0[4], pre->r0[5], pre->r0[6], pre->r0[7], pre->m2, pre->m3);
+  pre->r0[8] = pre->h[2];
+  pre->r0[9] = pre->h[6];
+  pre->r0[10] = 0x3c6ef372fe94f82bULL;
+  pre->r0[11] = 0x1f83d9abfb41bd6bULL ^ 0xffffffffffffffffULL;
+  Gxy(pre->r0[8], pre->r0[9], pre->r0[10], pre->r0[11], pre->m4, pre->m5);
 }
 
 // Single final-block blake2b compression from the precomputed state. Rounds
@@ -141,49 +170,25 @@ __device__ void blake2b_gpu_hash_pre(const blake2b_pre *pre, u32 idx, uchar *has
   const u64 m5 = pre->m5;
   const u64 m6 = pre->m6lo | ((u64)idx << 32);
 
-  u64 v0 = pre->h[0];
-  u64 v1 = pre->h[1];
-  u64 v2 = pre->h[2];
-  u64 v3 = pre->h[3];
-  u64 v4 = pre->h[4];
-  u64 v5 = pre->h[5];
-  u64 v6 = pre->h[6];
+  u64 v0 = pre->r0[0];
+  u64 v1 = pre->r0[4];
+  u64 v2 = pre->r0[8];
+  u64 v3 = pre->v3base;
+  u64 v4 = pre->r0[1];
+  u64 v5 = pre->r0[5];
+  u64 v6 = pre->r0[9];
   u64 v7 = pre->h[7];
-  u64 v8 = 0x6a09e667f3bcc908ULL;
-  u64 v9 = 0xbb67ae8584caa73bULL;
-  u64 v10 = 0x3c6ef372fe94f82bULL;
+  u64 v8 = pre->r0[2];
+  u64 v9 = pre->r0[6];
+  u64 v10 = pre->r0[10];
   u64 v11 = 0xa54ff53a5f1d36f1ULL;
-  u64 v12 = 0x510e527fade682d1ULL ^ pre->t;
-  u64 v13 = 0x9b05688c2b3e6c1fULL;
-  u64 v14 = 0x1f83d9abfb41bd6bULL ^ 0xffffffffffffffffULL;
+  u64 v12 = pre->r0[3];
+  u64 v13 = pre->r0[7];
+  u64 v14 = pre->r0[11];
   u64 v15 = 0x5be0cd19137e2179ULL;
 
   // round 0
-  v0 = v0 + v4 + m0;
-  ((uint2*)&v12)[0] = SWAPUINT2( ((uint2*)&v12)[0] ^ ((uint2*)&v0)[0] );
-  v8 = v8 + v12;
-  ((uint2*)&v4)[0] = ROR24( ((uint2*)&v4)[0] ^ ((uint2*)&v8)[0] );
-  v0 = v0 + v4 + m1;
-  ((uint2*)&v12)[0] = ROR16( ((uint2*)&v12)[0] ^ ((uint2*)&v0)[0] );
-  v8 = v8 + v12;
-  ((uint2*)&v4)[0] = ROR2( ((uint2*)&v4)[0] ^ ((uint2*)&v8)[0], 63U );
-  v1 = v1 + v5 + m2;
-  ((uint2*)&v13)[0] = SWAPUINT2( ((uint2*)&v13)[0] ^ ((uint2*)&v1)[0] );
-  v9 = v9 + v13;
-  ((uint2*)&v5)[0] = ROR24( ((uint2*)&v5)[0] ^ ((uint2*)&v9)[0] );
-  v1 = v1 + v5 + m3;
-  ((uint2*)&v13)[0] = ROR16( ((uint2*)&v13)[0] ^ ((uint2*)&v1)[0] );
-  v9 = v9 + v13;
-  ((uint2*)&v5)[0] = ROR2( ((uint2*)&v5)[0] ^ ((uint2*)&v9)[0], 63U );
-  v2 = v2 + v6 + m4;
-  ((uint2*)&v14)[0] = SWAPUINT2( ((uint2*)&v14)[0] ^ ((uint2*)&v2)[0] );
-  v10 = v10 + v14;
-  ((uint2*)&v6)[0] = ROR24( ((uint2*)&v6)[0] ^ ((uint2*)&v10)[0] );
-  v2 = v2 + v6 + m5;
-  ((uint2*)&v14)[0] = ROR16( ((uint2*)&v14)[0] ^ ((uint2*)&v2)[0] );
-  v10 = v10 + v14;
-  ((uint2*)&v6)[0] = ROR2( ((uint2*)&v6)[0] ^ ((uint2*)&v10)[0], 63U );
-  v3 = v3 + v7 + m6;
+  v3 = v3 + ((u64)idx << 32);
   ((uint2*)&v15)[0] = SWAPUINT2( ((uint2*)&v15)[0] ^ ((uint2*)&v3)[0] );
   v11 = v11 + v15;
   ((uint2*)&v7)[0] = ROR24( ((uint2*)&v7)[0] ^ ((uint2*)&v11)[0] );
