@@ -16,6 +16,11 @@ if [ -z "${CUDA_HOME:-}" ]; then
 fi
 [ -x "${CUDA_HOME:-}/bin/nvcc" ] || { echo "nvcc not found; set CUDA_HOME" >&2; exit 1; }
 echo "Using CUDA toolkit: ${CUDA_HOME}"
+CXX=${CXX:-g++}
+NVCC_HOST_FLAGS=()
+if [ -n "${NVCC_CCBIN:-}" ]; then
+    NVCC_HOST_FLAGS=(-ccbin "${NVCC_CCBIN}")
+fi
 
 # Fat binary: Turing (sm_75) through Blackwell (sm_120), plus PTX for newer
 # GPUs. Pascal/Volta users: build with a CUDA 12.x toolkit and override
@@ -30,15 +35,15 @@ GENCODE=${GENCODE:-"\
  -gencode arch=compute_120,code=compute_120"}
 
 mkdir -p obj
-g++ -O3 -march=x86-64 -mtune=generic -fPIC -std=c++17 -c eqcuda1445/blake/blake2b.cpp -o obj/blake.o
-"${CUDA_HOME}/bin/nvcc" ${GENCODE} -O3 -std=c++17 -allow-unsupported-compiler \
+"${CXX}" -O3 -march=x86-64 -mtune=generic -fPIC -std=c++17 -c eqcuda1445/blake/blake2b.cpp -o obj/blake.o
+"${CUDA_HOME}/bin/nvcc" "${NVCC_HOST_FLAGS[@]}" ${GENCODE} -O3 -std=c++17 -allow-unsupported-compiler \
     -Xptxas -O3 -Xcompiler -O3,-fPIC -c eqcuda1445/solver.cu -o obj/solver.o
 ar rcs libeqcuda1445.a obj/solver.o obj/blake.o
 
 # ./build.sh test — solve 20 nonces on every GPU and verify every solution
 # against the CPU verifier.
 if [ "${1:-}" = "test" ]; then
-    g++ -O2 -std=c++17 -I. -I"${CUDA_HOME}/include" eqcuda1445/test_verify.cpp libeqcuda1445.a \
+    "${CXX}" -O2 -std=c++17 -I. -I"${CUDA_HOME}/include" eqcuda1445/test_verify.cpp libeqcuda1445.a \
         -o obj/test_verify -L"${CUDA_HOME}/lib64" -lcudart_static -ldl -lrt -lpthread
     ./obj/test_verify
 fi
