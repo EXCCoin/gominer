@@ -16,7 +16,7 @@ g++ -O3 -march=x86-64 -mtune=generic -fPIC -std=c++17 \
 "${HIPCC}" -O2 -w -std=c++17 --offload-arch="${GPU_ARCH}" -fPIC \
     -D__HIP_PLATFORM_AMD__ \
     '-D__forceinline__=inline __attribute__((always_inline))' \
-    -Ieqcuda1445 -c eqcuda1445/solver.cu -o obj/hip/solver.o
+    -Ieqcuda1445 -c eqcuda1445/solver_hip.cu -o obj/hip/solver.o
 ar rcs libeqhip1445.a obj/hip/solver.o obj/hip/blake.o
 
 if [ "${1:-}" = "test" ]; then
