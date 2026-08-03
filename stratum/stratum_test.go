@@ -24,7 +24,7 @@ func subscribeReply(id uint64) string {
 func notifyMessage() string {
 	return `{"id":null,"method":"mining.notify","params":["job","` +
 		strings.Repeat("0", 64) + `","` + strings.Repeat("0", minCoinbase1Size*2) +
-		`","",[],"01000000","1a12334a","00000000",true]}`
+		`","","","01000000","1a12334a","00000000",true]}`
 }
 
 func writeLine(conn net.Conn, line string) {

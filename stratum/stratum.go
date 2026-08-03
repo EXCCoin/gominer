@@ -849,14 +849,14 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 			&nres.Hash,
 			&nres.GenTX1,
 			&nres.GenTX2,
-			&nres.MerkleBranches,
 			&nres.BlockVersion,
 			&nres.Nbits,
 			&nres.Ntime,
 			&nres.CleanJobs,
 		}
-		for i := range fields {
-			if err := json.Unmarshal(params[i], fields[i]); err != nil {
+		// Merkle branches are unused, and pools encode the field as either "" or [].
+		for i, param := range []int{0, 1, 2, 3, 5, 6, 7, 8} {
+			if err := json.Unmarshal(params[param], fields[i]); err != nil {
 				return nil, err
 			}
 		}
