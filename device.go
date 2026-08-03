@@ -389,6 +389,17 @@ func (w *eqWorker) handleSolution(solution []byte) {
 		return
 	}
 
+	header, err := hdr.SerializeEquihashHeaderBytes(chainParams.Algorithm(hdr.Height))
+	if err != nil {
+		minrLog.Errorf("DEV #%d failed to serialize Equihash header: %v", d.index, err)
+		return
+	}
+	if code := C.equihash_verify_c((*C.char)(unsafe.Pointer(&header[0])), C.uint32_t(len(header)),
+		(*C.uchar)(unsafe.Pointer(&hdr.EquihashSolution[0]))); code != 0 {
+		minrLog.Errorf("DEV #%d rejected invalid Equihash solution (verify code %d)", d.index, int(code))
+		return
+	}
+
 	solutionType := "block candidate"
 	if w.jobID != "" {
 		solutionType = "pool share"
@@ -405,7 +416,7 @@ func (w *eqWorker) handleSolution(solution []byte) {
 	data := make([]byte, work.GetworkDataLen)
 	copy(data, buf.Bytes())
 
-	d.workDone <- WorkResult{data: data, jobID: w.jobID}
+	sendOrQuit(d.workDone, WorkResult{data: data, jobID: w.jobID}, d.quit)
 }
 
 // runWorker owns one solver instance and grinds nonces on it until shutdown.
