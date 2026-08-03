@@ -148,6 +148,68 @@ fn compress_solution(sol: &[u32; PROOFSIZE]) -> [u8; COMPRESSED_SOL_SIZE] {
     out
 }
 
+fn uncompress_solution(sol: &[u8; COMPRESSED_SOL_SIZE]) -> [u32; PROOFSIZE] {
+    let mut indices = [0u32; PROOFSIZE];
+    for (i, index) in indices.iter_mut().enumerate() {
+        for bit in i * 25..(i + 1) * 25 {
+            *index = (*index << 1) | u32::from((sol[bit / 8] >> (7 - bit % 8)) & 1);
+        }
+    }
+    indices
+}
+
+fn leaf_hash(h: &[u64; 8], rem: &[u8; 52], idx: u32) -> [u8; 18] {
+    let mut hh = *h;
+    let mut block = [0u8; 128];
+    block[..52].copy_from_slice(rem);
+    block[52..56].copy_from_slice(&(idx / 3).to_le_bytes());
+    blake2b_compress(&mut hh, &block, 184, true);
+    let mut digest = [0u8; 56];
+    for i in 0..7 {
+        digest[8 * i..8 * i + 8].copy_from_slice(&hh[i].to_le_bytes());
+    }
+    let offset = (idx % 3) as usize * 18;
+    digest[offset..offset + 18].try_into().unwrap()
+}
+
+fn verify_tree(
+    h: &[u64; 8],
+    rem: &[u8; 52],
+    indices: &[u32],
+    round: usize,
+) -> Result<[u8; 18], i32> {
+    if round == 0 {
+        return Ok(leaf_hash(h, rem, indices[0]));
+    }
+    let half = 1 << (round - 1);
+    if indices[0] >= indices[half] {
+        return Err(3); // POW_OUT_OF_ORDER
+    }
+    let left = verify_tree(h, rem, &indices[..half], round - 1)?;
+    let right = verify_tree(h, rem, &indices[half..], round - 1)?;
+    let mut hash = [0u8; 18];
+    for i in 0..hash.len() {
+        hash[i] = left[i] ^ right[i];
+    }
+    let zero_bytes = if round < 5 { round * 3 } else { 18 };
+    if hash[..zero_bytes].iter().any(|&byte| byte != 0) {
+        return Err(4); // POW_NONZERO_XOR
+    }
+    Ok(hash)
+}
+
+fn verify_solution(header: &[u8], solution: &[u8]) -> i32 {
+    if header.len() != HEADER_LEN || solution.len() != COMPRESSED_SOL_SIZE {
+        return 1; // POW_HEADER_LENGTH
+    }
+    let indices = uncompress_solution(solution.try_into().unwrap());
+    if duped(&indices) {
+        return 2; // POW_DUPLICATE
+    }
+    let (h, rem) = equihash_midstate(header.try_into().unwrap());
+    verify_tree(&h, &rem, &indices, 5).map_or_else(|code| code, |_| 0)
+}
+
 // ---------------- wgpu plumbing ----------------
 
 fn instance() -> &'static wgpu::Instance {
@@ -260,19 +322,34 @@ impl KernelVariant {
 
 const SOLS_BYTES: u64 = 4 + (MAXSOLS * PROOFSIZE * 4) as u64;
 
-fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
-    let nthreads = if nthreads == 0 {
+fn dispatch_size(nthreads: u32, max_workgroups: u32) -> Result<(u32, u32), String> {
+    let requested = if nthreads == 0 {
         DEFAULT_NTHREADS
     } else {
         nthreads
     };
-    let nthreads = nthreads.div_ceil(WORKGROUP) * WORKGROUP;
+    let workgroups = requested.div_ceil(WORKGROUP);
+    if workgroups > max_workgroups {
+        return Err(format!(
+            "worksize {requested} needs {workgroups} workgroups; adapter limit is {max_workgroups}"
+        ));
+    }
+    let rounded = workgroups
+        .checked_mul(WORKGROUP)
+        .ok_or_else(|| format!("worksize {requested} overflows after workgroup rounding"))?;
+    Ok((rounded, workgroups))
+}
 
+fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
     let all = adapters();
     let idx = ADAPTER_IDX.with(|c| c.get()) as usize;
     let adapter = all.get(idx).ok_or_else(|| format!("no adapter {idx}"))?;
     let adapter_limits = adapter.limits();
     let variant = KernelVariant::select(&adapter_limits)?;
+    let (nthreads, digit_h_workgroups) = dispatch_size(
+        nthreads,
+        adapter_limits.max_compute_workgroups_per_dimension,
+    )?;
 
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
@@ -421,11 +498,7 @@ fn create_solver(nthreads: u32) -> Result<EqSolver, String> {
             cache: None,
         })
     };
-    let mut pipelines = vec![(
-        mk_pipeline(&module, "digitH", None),
-        nthreads / WORKGROUP,
-        1,
-    )];
+    let mut pipelines = vec![(mk_pipeline(&module, "digitH", None), digit_h_workgroups, 1)];
     let (collision_dispatches_x, collision_dispatches_y) = variant.collision_dispatches();
     for r in 1..=4 {
         pipelines.push((
@@ -562,7 +635,9 @@ pub unsafe extern "C" fn eq_create(nthreads: u32) -> *mut EqSolver {
 #[no_mangle]
 pub unsafe extern "C" fn eq_destroy(solver: *mut EqSolver) {
     if !solver.is_null() {
-        drop(Box::from_raw(solver));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            drop(Box::from_raw(solver));
+        }));
     }
 }
 
@@ -600,31 +675,57 @@ pub unsafe extern "C" fn eq_solve(
     }
 }
 
+/// # Safety
+/// `header` points to `header_len` readable bytes and `solution` to 100 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn equihash_verify_c(
+    header: *const u8,
+    header_len: u32,
+    solution: *const u8,
+) -> i32 {
+    if header.is_null() || solution.is_null() || header_len as usize != HEADER_LEN {
+        return -1;
+    }
+    std::panic::catch_unwind(|| {
+        verify_solution(
+            std::slice::from_raw_parts(header, HEADER_LEN),
+            std::slice::from_raw_parts(solution, COMPRESSED_SOL_SIZE),
+        )
+    })
+    .unwrap_or(-1)
+}
+
 #[no_mangle]
 pub extern "C" fn eq_adapter_count() -> u32 {
-    adapters().len() as u32
+    std::panic::catch_unwind(|| adapters().len() as u32).unwrap_or(0)
 }
 
 /// # Safety
 /// `buf` points to `len` writable bytes; writes a NUL-terminated name.
 #[no_mangle]
 pub unsafe extern "C" fn eq_adapter_name(index: u32, buf: *mut u8, len: u32) -> i32 {
-    let all = adapters();
-    let Some(a) = all.get(index as usize) else {
+    if buf.is_null() || len == 0 {
         return -1;
-    };
-    let info = a.get_info();
-    let name = format!("{} ({:?})", info.name, info.backend);
-    let bytes = name.as_bytes();
-    let n = bytes.len().min(len as usize - 1);
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n);
-    *buf.add(n) = 0;
-    0
+    }
+    std::panic::catch_unwind(|| {
+        let all = adapters();
+        let Some(a) = all.get(index as usize) else {
+            return -1;
+        };
+        let info = a.get_info();
+        let name = format!("{} ({:?})", info.name, info.backend);
+        let bytes = name.as_bytes();
+        let n = bytes.len().min(len as usize - 1);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, n);
+        *buf.add(n) = 0;
+        0
+    })
+    .unwrap_or(-1)
 }
 
 #[no_mangle]
 pub extern "C" fn eq_set_adapter(index: u32) {
-    ADAPTER_IDX.with(|c| c.set(index));
+    let _ = std::panic::catch_unwind(|| ADAPTER_IDX.with(|c| c.set(index)));
 }
 
 // ---------------- tests ----------------
@@ -699,43 +800,49 @@ mod tests {
         );
     }
 
-    // full hash of leaf index: blake2b(header || le32(idx/3)), take 18-byte
-    // sub-hash idx%3 — used to verify Wagner conditions on GPU solutions
-    fn leaf_hash(h: &[u64; 8], rem: &[u8; 52], idx: u32) -> [u8; 18] {
-        let mut hh = *h;
-        let mut block = [0u8; 128];
-        block[..52].copy_from_slice(rem);
-        block[52..56].copy_from_slice(&(idx / 3).to_le_bytes());
-        blake2b_compress(&mut hh, &block, 184, true);
-        let mut digest = [0u8; 56];
-        for i in 0..7 {
-            digest[8 * i..8 * i + 8].copy_from_slice(&hh[i].to_le_bytes());
-        }
-        let off = (idx % 3) as usize * 18;
-        digest[off..off + 18].try_into().unwrap()
+    fn decode_hex<const N: usize>(value: &str) -> [u8; N] {
+        assert_eq!(value.len(), N * 2);
+        std::array::from_fn(|i| u8::from_str_radix(&value[i * 2..i * 2 + 2], 16).unwrap())
     }
 
-    fn verify_tree(h: &[u64; 8], rem: &[u8; 52], indices: &[u32], round: usize) -> [u8; 18] {
-        if round == 0 {
-            return leaf_hash(h, rem, indices[0]);
-        }
-        let half = 1 << (round - 1);
-        assert!(
-            indices[0] < indices[half],
-            "round {round} branches are not canonically ordered"
+    #[test]
+    fn verifier_accepts_known_block_and_rejects_corruption() {
+        // EXCC mainnet block 616802, independently accepted by the CUDA verifier.
+        let header = decode_hex::<HEADER_LEN>(concat!(
+            "050000002a27d50432c7585b1435ca5ec904266a3246040860860fd1c2038e69",
+            "450800006e4497ec71b812ffe8bb51f207b028ad19d8f01a70a2af25b6c8863b",
+            "ece08588afdfc326ac34ec2d2c0e3cadc868d3d5214b7a001334ddcb2ba3001e",
+            "fbf32ca80100385d3d9bee0f05000200f29d0000cf25461e0af5555c00000000",
+            "626909003d11000043b5e6608490310000000000000000003750d39100000000",
+            "0000000000000000000000000000000005000000"
+        ));
+        let solution = decode_hex::<COMPRESSED_SOL_SIZE>(concat!(
+            "0389234e87650cbcfc6b50c0e1d876f6b0bd3d53f1159c580e3226af7bf2cc66",
+            "30179b2355d6791ca414cc72636f23afb0d20f6e4798db719e23343afb11f330",
+            "b25fd9fef1d046c9983c222be1193fd0da8bbc23be9b5d74d6f543ed6b65544f",
+            "ccf479d8"
+        ));
+        assert_eq!(verify_solution(&header, &solution), 0);
+        assert_eq!(
+            unsafe { equihash_verify_c(header.as_ptr(), HEADER_LEN as u32, solution.as_ptr()) },
+            0
         );
-        let left = verify_tree(h, rem, &indices[..half], round - 1);
-        let right = verify_tree(h, rem, &indices[half..], round - 1);
-        let mut hash = [0u8; 18];
-        for i in 0..hash.len() {
-            hash[i] = left[i] ^ right[i];
-        }
-        let zero_bytes = if round < 5 { round * 3 } else { 18 };
-        assert!(
-            hash[..zero_bytes].iter().all(|&byte| byte == 0),
-            "round {round} collision prefix is nonzero"
+
+        let mut corrupt = solution;
+        corrupt[0] ^= 0x80;
+        assert_ne!(verify_solution(&header, &corrupt), 0);
+    }
+
+    #[test]
+    fn abi_and_dispatch_limits_are_checked() {
+        assert_eq!(dispatch_size(1, 1).unwrap(), (WORKGROUP, 1));
+        assert!(dispatch_size(WORKGROUP + 1, 1).is_err());
+        assert!(dispatch_size(u32::MAX, 65_535).is_err());
+        assert_eq!(unsafe { eq_adapter_name(0, std::ptr::null_mut(), 0) }, -1);
+        assert_eq!(
+            unsafe { equihash_verify_c(std::ptr::null(), 0, std::ptr::null()) },
+            -1
         );
-        hash
     }
 
     #[test]
@@ -747,21 +854,11 @@ mod tests {
             header[NONCE_OFFSET..NONCE_OFFSET + 4].copy_from_slice(&nonce.to_le_bytes());
             let (h, rem) = equihash_midstate(&header);
             let n = solve(&s, &header, nonce, |csol| {
-                // uncompress: 32 big-endian 25-bit indices
-                let mut idxs = [0u32; PROOFSIZE];
-                for (i, v) in idxs.iter_mut().enumerate() {
-                    let bit = i * 25;
-                    for b in 0..25 {
-                        let bitpos = bit + b;
-                        if csol[bitpos / 8] >> (7 - bitpos % 8) & 1 == 1 {
-                            *v |= 1 << (24 - b);
-                        }
-                    }
-                }
+                let idxs = uncompress_solution(csol);
                 let mut sorted = idxs;
                 sorted.sort_unstable();
                 assert!(sorted.windows(2).all(|pair| pair[0] != pair[1]));
-                assert_eq!(verify_tree(&h, &rem, &idxs, 5), [0u8; 18]);
+                assert_eq!(verify_tree(&h, &rem, &idxs, 5), Ok([0u8; 18]));
                 false
             });
             assert!(n >= 0, "solve failed: {n}");

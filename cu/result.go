@@ -5,10 +5,8 @@ package cu
 // This file provides access to CUDA driver error statuses (type CUresult).
 
 /*
-#cgo !windows CXXFLAGS: -O3 -march=x86-64 -mtune=generic
-#cgo !windows CFLAGS: -O3 -march=x86-64 -mtune=generic
-#cgo windows CFLAGS: -I"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/include" -O3 -march=x86-64 -mtune=generic
-#cgo windows CXXFLAGS: -I"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v9.2/include" -O3 -march=x86-64 -mtune=generic
+#cgo CXXFLAGS: -O3 -march=x86-64 -mtune=generic
+#cgo CFLAGS: -O3 -march=x86-64 -mtune=generic
 #include <cuda.h>
 */
 import "C"

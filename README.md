@@ -69,6 +69,7 @@ $ curl http://localhost:3333/
 - The Go version declared in `go.mod` (automatic toolchain download is supported)
 - A recent NVIDIA driver
 - CUDA toolkit >= 12.8 from [here](https://developer.nvidia.com/cuda-downloads)
+  * The CUDA backend is currently supported on Linux only; Windows CUDA has no maintained solver build recipe.
   * CUDA 13.x covers Turing (GTX 16xx / RTX 20xx) through Blackwell (RTX 50xx).
     For Pascal (GTX 10xx) build with a CUDA 12.x toolkit and override `GENCODE`
     (see `build.sh`).

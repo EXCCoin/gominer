@@ -26,6 +26,10 @@
 #define cudaStreamDestroy hipStreamDestroy
 #define __shfl_sync(mask, value, lane) __shfl(value, lane)
 #define __syncwarp() __builtin_amdgcn_wave_barrier()
+#if defined(__HIP_DEVICE_COMPILE__) && \
+    (!defined(__AMDGCN_WAVEFRONT_SIZE) || __AMDGCN_WAVEFRONT_SIZE != 32)
+#error "eqhip1445 requires 32-lane wavefronts"
+#endif
 #endif
 
 #include "eqcuda1445.cuh"

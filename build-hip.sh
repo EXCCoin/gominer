@@ -24,7 +24,8 @@ if [ "${1:-}" = "test" ]; then
         -D__HIP_PLATFORM_AMD__ -c eqcuda1445/test_verify.cpp \
         -o obj/hip/test_verify.o
     "${HIPCC}" --offload-arch="${GPU_ARCH}" obj/hip/test_verify.o \
-        libeqhip1445.a -o obj/hip/test_verify
+        libeqhip1445.a -L"${HIP_PATH}/lib" -L"${HIP_PATH}/lib64" \
+        -lamdhip64 -o obj/hip/test_verify
     ./obj/hip/test_verify
 fi
 

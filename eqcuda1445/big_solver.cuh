@@ -433,6 +433,9 @@ __global__ __launch_bounds__(256) void bb_final(equi *eq, const u32 *__restrict_
     constexpr u32 KEY_BITS = FINAL_BITS - PART_BITS;
     constexpr u32 KEYS = 1u << KEY_BITS;
     constexpr u32 KEY_MASK = KEYS - 1;
+    // Parent layout: slot0, slot1, input bucket, then the collision tail.
+    constexpr u32 R4_META_SHIFT = 2 * BB_MID_SLOT_BITS + BB_MID_BUCKET_BITS;
+    static_assert(R4_META_SHIFT + DIGITBITS <= 64, "round-4 parent metadata");
     __shared__ u32 heads[KEYS];
     __shared__ u16 next[BB_CAPACITY];
 
@@ -461,7 +464,8 @@ __global__ __launch_bounds__(256) void bb_final(equi *eq, const u32 *__restrict_
         for (u32 s0 = next[s1]; s0 != 0xffffu; s0 = next[s0]) {
             const u32 index0 = base + s0;
             if (in[index0 * 4] == h10 &&
-                (((bb_r4_parent(in, index0) ^ bb_r4_parent(in, index1)) >> 39) & 0xffffff) == 0)
+                (((bb_r4_parent(in, index0) ^ bb_r4_parent(in, index1)) >> R4_META_SHIFT) &
+                 ((u64(1) << DIGITBITS) - 1)) == 0)
                 bb_candidate(eq, leaves, p1, p2, p3, in, index0, index1);
         }
     }

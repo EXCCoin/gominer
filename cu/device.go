@@ -7,8 +7,9 @@ package cu
 /*
 #cgo CXXFLAGS: -O3 -Wno-deprecated-declarations
 #cgo CFLAGS: -O3 -Wno-deprecated-declarations
-#cgo LDFLAGS: -lcuda -lcudart_static -ldl -lrt -lpthread
-#cgo CFLAGS: -I/usr/local/cuda/include
+#cgo !windows CFLAGS: -I/usr/local/cuda/include
+#cgo !windows LDFLAGS: -lcuda -lcudart_static -ldl -lrt -lpthread
+#cgo windows LDFLAGS: -lcuda -lcudart
 #include <cuda.h>
 #include <cuda_runtime.h>
 */

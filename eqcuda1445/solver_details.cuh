@@ -139,7 +139,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
     }
 }
 
-void cuda_init() {
+static void cuda_init() {
 	checkCudaErrors(cudaSetDeviceFlags(cudaDeviceScheduleYield));
 }
 
@@ -158,7 +158,7 @@ static void setperson(blake2b_state *ctx) {
     blake2b_init_param(ctx, &P);
 }
 
-void setheader(blake2b_state *ctx, const uint8_t *input, u32 input_len, u32 nonce) {
+static void setheader(blake2b_state *ctx, const uint8_t *input, u32 input_len, u32 nonce) {
     uint8_t localInput[180];
     memcpy(localInput, input, input_len);
     nonce = htole32(nonce);
@@ -167,7 +167,7 @@ void setheader(blake2b_state *ctx, const uint8_t *input, u32 input_len, u32 nonc
     blake2b_update(ctx, localInput, input_len);
 }
 
-void genhash(const blake2b_state *ctx, u32 idx, uchar *hash) {
+static void genhash(const blake2b_state *ctx, u32 idx, uchar *hash) {
     blake2b_state state = *ctx;
     u32 leb = htole32(idx / HASHESPERBLAKE);
     blake2b_update(&state, (uchar *)&leb, sizeof(u32));
@@ -176,7 +176,7 @@ void genhash(const blake2b_state *ctx, u32 idx, uchar *hash) {
     memcpy(hash, blakehash + (idx % HASHESPERBLAKE) * WN / 8, WN / 8);
 }
 
-verify_code verifyrec(const blake2b_state *ctx, const proof indices, uchar *hash, int r) {
+static verify_code verifyrec(const blake2b_state *ctx, const proof indices, uchar *hash, int r) {
     if (r == 0) {
         genhash(ctx, *indices, hash);
         return verify_code::POW_OK;
@@ -209,12 +209,12 @@ verify_code verifyrec(const blake2b_state *ctx, const proof indices, uchar *hash
     return verify_code::POW_OK;
 }
 
-int compu32(const void *pa, const void *pb) {
+static int compu32(const void *pa, const void *pb) {
     u32 a = *(u32 *)pa, b = *(u32 *)pb;
     return a < b ? -1 : a == b ? 0 : +1;
 }
 
-bool duped(const proof prf) {
+static bool duped(const proof prf) {
     proof sortprf;
     memcpy(sortprf, prf, sizeof(proof));
     qsort(sortprf, PROOFSIZE, sizeof(u32), &compu32);
@@ -225,7 +225,7 @@ bool duped(const proof prf) {
     return false;
 }
 
-std::string to_hex(const uchar *data, u64 len) {
+static std::string to_hex(const uchar *data, u64 len) {
     static const char hexmap[] = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
 
     std::string s(len * 2, ' ');
@@ -236,7 +236,7 @@ std::string to_hex(const uchar *data, u64 len) {
     return s;
 }
 
-void compress_solution(const proof sol, cproof output) {
+static void compress_solution(const proof sol, cproof output) {
     uchar b;
 
     for (u32 i = 0, j = 0, bits_left = DIGITBITS + 1;
@@ -255,13 +255,13 @@ void compress_solution(const proof sol, cproof output) {
     }
 }
 
-u32 array_to_index(const uchar *array) {
+static u32 array_to_index(const uchar *array) {
     u32 bei;
     memcpy(&bei, array, sizeof(bei));
     return be32toh(bei);
 }
 
-void expand_array(const uchar *in, u64 in_len, uchar *out, u64 out_len, u64 bit_len, u64 byte_pad) {
+static void expand_array(const uchar *in, u64 in_len, uchar *out, u64 out_len, u64 bit_len, u64 byte_pad) {
     assert(bit_len >= 8);
     assert(8 * sizeof(u32) >= 7 + bit_len);
 
@@ -300,7 +300,7 @@ void expand_array(const uchar *in, u64 in_len, uchar *out, u64 out_len, u64 bit_
     }
 }
 
-void uncompress_solution(const cproof sol, proof output) {
+static void uncompress_solution(const cproof sol, proof output) {
     const u64 collision_bit_length = WN / (WK + 1);
     const u64 solution_width       = (1 << WK) * (collision_bit_length + 1) / 8;
 
@@ -318,7 +318,7 @@ void uncompress_solution(const cproof sol, proof output) {
 }
 
 // size (in bytes) of hash in round 0 <= r < WK
-u32 hhashsize(const u32 r) {
+static u32 hhashsize(const u32 r) {
 #ifdef XINTREE
     const u32 hashbits = WN - (r + 1) * DIGITBITS;
 #else
@@ -328,7 +328,7 @@ u32 hhashsize(const u32 r) {
 }
 
 // size (in bytes) of hash in round 0 <= r < WK
-__device__ u32 hashsize(const u32 r) {
+static __device__ u32 hashsize(const u32 r) {
 #ifdef XINTREE
     const u32 hashbits = WN - (r + 1) * DIGITBITS;
 #else
@@ -337,11 +337,11 @@ __device__ u32 hashsize(const u32 r) {
     return (hashbits + 7) / 8;
 }
 
-u32 hhashwords(u32 bytes) {
+static u32 hhashwords(u32 bytes) {
 	return (bytes + 3) / 4;
 }
 
-__device__ u32 hashwords(u32 bytes) {
+static __device__ u32 hashwords(u32 bytes) {
 	return (bytes + 3) / 4;
 }
 
