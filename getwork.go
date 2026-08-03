@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"math/big"
 	"net"
@@ -270,12 +271,18 @@ func GetPoolWorkSubmit(data []byte, pool *stratum.Stratum, jobID string) (bool, 
 
 	// Send.
 	poolLog.Tracef("%s", m)
-	_, err = pool.Conn.Write(m)
-	if err != nil {
+	if err := pool.Conn.SetWriteDeadline(time.Now().Add(time.Duration(RequestTimeout) * time.Second)); err != nil {
 		return false, err
 	}
-	_, err = pool.Conn.Write([]byte("\n"))
+	defer pool.Conn.SetWriteDeadline(time.Time{})
+	m = append(m, '\n')
+	var n int
+	n, err = pool.Conn.Write(m)
+	if err == nil && n != len(m) {
+		err = io.ErrShortWrite
+	}
 	if err != nil {
+		_ = pool.Conn.Close()
 		return false, err
 	}
 

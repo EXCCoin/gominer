@@ -17,6 +17,15 @@ type WorkResult struct {
 	jobID string
 }
 
+func sendOrQuit[T any](dst chan<- T, value T, quit <-chan struct{}) bool {
+	select {
+	case dst <- value:
+		return true
+	case <-quit:
+		return false
+	}
+}
+
 type Miner struct {
 	// The following variables must only be used atomically.
 	validShares   uint64
@@ -94,7 +103,9 @@ func (m *Miner) workSubmitThread() {
 						atomic.AddUint64(&m.invalidShares, 1)
 					}
 
-					m.needsWorkRefresh <- struct{}{}
+					if !sendOrQuit(m.needsWorkRefresh, struct{}{}, m.quit) {
+						return
+					}
 				}
 			} else {
 				submitted, err := GetPoolWorkSubmit(workResult.data, m.pool, workResult.jobID)
@@ -217,6 +228,19 @@ func (m *Miner) printStatsThread() {
 
 func (m *Miner) Run() error {
 	deviceResults := make(chan error, len(m.devices))
+	var poolResult chan error
+	if m.pool != nil {
+		poolResult = make(chan error, 1)
+		go func() {
+			select {
+			case err := <-m.pool.Errors:
+				poolResult <- err
+				m.Stop()
+			case <-m.quit:
+				poolResult <- nil
+			}
+		}()
+	}
 	m.wg.Add(len(m.devices))
 
 	for _, d := range m.devices {
@@ -274,6 +298,9 @@ func (m *Miner) Run() error {
 		if err := <-deviceResults; err != nil {
 			return err
 		}
+	}
+	if poolResult != nil {
+		return <-poolResult
 	}
 	return nil
 }

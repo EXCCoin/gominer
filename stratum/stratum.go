@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"strconv"
@@ -32,8 +33,19 @@ var chainParams = chaincfg.MainNetParams()
 
 const reconnectRetryDelay = 5 * time.Second
 
+const (
+	maxStratumMessageSize = 1 << 20
+	minCoinbase1Size      = 108
+)
+
 // ErrStratumStaleWork indicates that the work to send to the pool was stale.
 var ErrStratumStaleWork = fmt.Errorf("Stale work, throwing away")
+
+var (
+	errAuthorizationRejected = errors.New("stratum authorization rejected")
+	errReconnectRequested    = errors.New("stratum server requested reconnect")
+	errStratumMessageTooLong = errors.New("stratum message exceeds 1 MiB")
+)
 
 // Stratum holds all the shared information for a stratum connection.
 // XXX most of these should be unexported and use getters/setters.
@@ -55,6 +67,7 @@ type Stratum struct {
 	Target    *big.Int
 	PoolWork  NotifyWork
 	WorkReady chan struct{}
+	Errors    chan error
 
 	Started uint32
 }
@@ -149,6 +162,40 @@ type NotifyRes struct {
 	CleanJobs      bool
 }
 
+func validateNotify(n NotifyRes) error {
+	if n.JobID == "" {
+		return errors.New("notify has no job ID")
+	}
+	cb1, err := hex.DecodeString(n.GenTX1)
+	if err != nil {
+		return fmt.Errorf("invalid coinbase part 1: %w", err)
+	}
+	if len(cb1) < minCoinbase1Size {
+		return fmt.Errorf("coinbase part 1 is %d bytes, need at least %d", len(cb1), minCoinbase1Size)
+	}
+	fields := []struct {
+		name  string
+		value string
+		size  int
+	}{
+		{"previous hash", n.Hash, 32},
+		{"coinbase part 2", n.GenTX2, -1},
+		{"block version", n.BlockVersion, 4},
+		{"difficulty bits", n.Nbits, 4},
+		{"timestamp", n.Ntime, 4},
+	}
+	for _, field := range fields {
+		decoded, err := hex.DecodeString(field.value)
+		if err != nil {
+			return fmt.Errorf("invalid %s: %w", field.name, err)
+		}
+		if field.size >= 0 && len(decoded) != field.size {
+			return fmt.Errorf("%s is %d bytes, need %d", field.name, len(decoded), field.size)
+		}
+	}
+	return nil
+}
+
 // Submit models a submission message.
 type Submit struct {
 	Params []string    `json:"params"`
@@ -178,13 +225,50 @@ func sliceRemove(s []uint64, e uint64) []uint64 {
 	return s
 }
 
+func unmarshalPoolError(raw json.RawMessage) (StratErr, error) {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return StratErr{}, nil
+	}
+	if raw[0] == '[' {
+		var fields []json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return StratErr{}, err
+		}
+		if len(fields) < 2 {
+			return StratErr{}, errJsonType
+		}
+		var result StratErr
+		if err := json.Unmarshal(fields[0], &result.ErrNum); err != nil {
+			return StratErr{}, err
+		}
+		if err := json.Unmarshal(fields[1], &result.ErrStr); err != nil {
+			return StratErr{}, err
+		}
+		return result, nil
+	}
+
+	var poolErr struct {
+		Code    uint64 `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &poolErr); err != nil {
+		return StratErr{}, err
+	}
+	return StratErr{ErrNum: poolErr.Code, ErrStr: poolErr.Message}, nil
+}
+
 func unmarshalBasicReply(objmap map[string]json.RawMessage) (*BasicReply, error) {
 	var id uint64
 	if err := json.Unmarshal(objmap["id"], &id); err != nil {
 		return nil, err
 	}
 	var result bool
-	if err := json.Unmarshal(objmap["result"], &result); err != nil {
+	rawResult, hasResult := objmap["result"]
+	if !hasResult || bytes.Equal(rawResult, []byte("null")) {
+		if rawError, ok := objmap["error"]; !ok || bytes.Equal(rawError, []byte("null")) {
+			return nil, errJsonType
+		}
+	} else if err := json.Unmarshal(rawResult, &result); err != nil {
 		return nil, err
 	}
 
@@ -192,15 +276,12 @@ func unmarshalBasicReply(objmap map[string]json.RawMessage) (*BasicReply, error)
 	if result {
 		return resp, nil
 	}
-	var poolErr *PoolError
 	if raw, ok := objmap["error"]; ok {
-		if err := json.Unmarshal(raw, &poolErr); err != nil {
+		poolErr, err := unmarshalPoolError(raw)
+		if err != nil {
 			return nil, err
 		}
-	}
-	if poolErr != nil {
-		resp.Error.ErrNum = poolErr.Code
-		resp.Error.ErrStr = poolErr.Message
+		resp.Error = poolErr
 	}
 	return resp, nil
 }
@@ -208,7 +289,10 @@ func unmarshalBasicReply(objmap map[string]json.RawMessage) (*BasicReply, error)
 // StratumConn starts the initial connection to a stratum pool and sets defaults
 // in the pool object.
 func StratumConn(pool, user, pass, proxy, proxyUser, proxyPass, version string) (*Stratum, error) {
-	stratum := Stratum{WorkReady: make(chan struct{}, 1)}
+	stratum := Stratum{
+		WorkReady: make(chan struct{}, 1),
+		Errors:    make(chan error, 1),
+	}
 	stratum.cfg.User = user
 	stratum.cfg.Pass = pass
 	stratum.cfg.Proxy = proxy
@@ -224,23 +308,7 @@ func StratumConn(pool, user, pass, proxy, proxyUser, proxyPass, version string) 
 		err := errors.New("Only stratum pools supported.")
 		return nil, err
 	}
-	var conn net.Conn
-	var err error
-	if stratum.cfg.Proxy != "" {
-		proxy := &socks.Proxy{
-			Addr:     stratum.cfg.Proxy,
-			Username: stratum.cfg.ProxyUser,
-			Password: stratum.cfg.ProxyPass,
-		}
-		conn, err = proxy.Dial("tcp", pool)
-	} else {
-		conn, err = net.Dial("tcp", pool)
-	}
-	if err != nil {
-		return nil, err
-	}
 	stratum.ID = 1
-	stratum.Conn = conn
 	stratum.cfg.Pool = pool
 
 	// We will set it for sure later but this really should be the value and
@@ -250,108 +318,71 @@ func StratumConn(pool, user, pass, proxy, proxyUser, proxyPass, version string) 
 
 	// Target for share is 1 unless we hear otherwise.
 	stratum.Diff = 1
+	var err error
 	stratum.Target, err = util.DiffToTarget(stratum.Diff, chainParams.PowLimit)
 	if err != nil {
 		return nil, err
 	}
 	stratum.PoolWork.NewWork = false
-	stratum.Reader = bufio.NewReader(stratum.Conn)
+	if err := stratum.Reconnect(); err != nil {
+		return nil, err
+	}
 	go stratum.Listen()
-
-	err = stratum.Subscribe()
-	if err != nil {
-		return nil, err
-	}
-	err = stratum.Auth()
-	if err != nil {
-		return nil, err
-	}
-
-	stratum.Started = uint32(time.Now().Unix())
 
 	return &stratum, nil
 }
 
 // Reconnect reconnects to a stratum server if the connection has been lost.
 func (s *Stratum) Reconnect() error {
-	s.Lock()
+	for {
+		err := s.reconnect()
+		if errors.Is(err, errReconnectRequested) {
+			continue
+		}
+		return err
+	}
+}
 
+func (s *Stratum) reconnect() error {
+	s.Lock()
 	if s.Conn != nil {
 		_ = s.Conn.Close()
 	}
+	pool := s.cfg.Pool
+	proxyAddr := s.cfg.Proxy
+	proxyUser := s.cfg.ProxyUser
+	proxyPass := s.cfg.ProxyPass
+	s.Unlock()
 
 	var conn net.Conn
 	var err error
-	if s.cfg.Proxy != "" {
+	if proxyAddr != "" {
 		proxy := &socks.Proxy{
-			Addr:     s.cfg.Proxy,
-			Username: s.cfg.ProxyUser,
-			Password: s.cfg.ProxyPass,
+			Addr:     proxyAddr,
+			Username: proxyUser,
+			Password: proxyPass,
 		}
-		conn, err = proxy.DialTimeout("tcp", s.cfg.Pool, reconnectRetryDelay)
+		conn, err = proxy.DialTimeout("tcp", pool, reconnectRetryDelay)
 	} else {
-		conn, err = net.DialTimeout("tcp", s.cfg.Pool, reconnectRetryDelay)
+		conn, err = net.DialTimeout("tcp", pool, reconnectRetryDelay)
 	}
 	if err != nil {
-		s.Unlock()
 		return err
 	}
+
+	s.Lock()
 	s.Conn = conn
-	s.Reader = bufio.NewReader(s.Conn)
+	s.Reader = bufio.NewReaderSize(conn, maxStratumMessageSize)
 	s.PoolWork.NewWork = false
+	s.submitIDs = nil
 	atomic.StoreUint32(&s.latestJobTime, 0)
-	err = s.Subscribe()
-	if err != nil {
-		_ = conn.Close()
-		s.Unlock()
-		return fmt.Errorf("subscribe: %w", err)
-	}
-	err = s.Auth()
-	if err != nil {
-		_ = conn.Close()
-		s.Unlock()
-		return fmt.Errorf("authorize: %w", err)
-	}
+	err = s.sendHandshake()
 	s.Unlock()
-
-	if err := conn.SetReadDeadline(time.Now().Add(reconnectRetryDelay)); err != nil {
+	if err != nil {
 		_ = conn.Close()
 		return err
 	}
-	var subscribed, authorized bool
-	var notify *NotifyRes
-	for !subscribed || !authorized || notify == nil {
-		result, err := s.Reader.ReadString('\n')
-		if err != nil {
-			_ = conn.Close()
-			return fmt.Errorf("waiting for fresh work: %w", err)
-		}
-
-		log.Debug(strings.TrimSuffix(result, "\n"))
-		resp, err := s.Unmarshal([]byte(result))
-		if err != nil {
-			log.Error(err)
-			continue
-		}
-		switch r := resp.(type) {
-		case *BasicReply:
-			if !r.Result {
-				s.handleResponse(resp)
-				_ = conn.Close()
-				return errors.New("authorization rejected")
-			}
-			authorized = true
-		case *SubscribeReply:
-			subscribed = true
-		case NotifyRes:
-			n := r
-			notify = &n
-			continue
-		}
-		s.handleResponse(resp)
-	}
-	s.handleResponse(*notify)
-	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+	if err := s.waitHandshake(conn); err != nil {
 		_ = conn.Close()
 		return err
 	}
@@ -362,16 +393,114 @@ func (s *Stratum) Reconnect() error {
 	return nil
 }
 
-func (s *Stratum) reconnectUntilReady() {
+func (s *Stratum) handshake(conn net.Conn) error {
+	s.Lock()
+	err := s.sendHandshake()
+	s.Unlock()
+	if err != nil {
+		return err
+	}
+	return s.waitHandshake(conn)
+}
+
+func (s *Stratum) sendHandshake() error {
+	if err := s.subscribe(); err != nil {
+		return fmt.Errorf("subscribe: %w", err)
+	}
+	if err := s.auth(); err != nil {
+		return fmt.Errorf("authorize: %w", err)
+	}
+	return nil
+}
+
+func (s *Stratum) waitHandshake(conn net.Conn) error {
+	var subscribed, authorized bool
+	var notify *NotifyRes
+	handshakeDeadline := time.Now().Add(reconnectRetryDelay)
+	var firstWorkDeadline time.Time
+	for !subscribed || !authorized || notify == nil {
+		deadline := handshakeDeadline
+		if subscribed && authorized {
+			if firstWorkDeadline.IsZero() {
+				firstWorkDeadline = time.Now().Add(4 * chainParams.TargetTimePerBlock)
+			}
+			deadline = firstWorkDeadline
+		}
+		if err := conn.SetReadDeadline(deadline); err != nil {
+			return err
+		}
+		result, err := readStratumMessage(s.Reader)
+		if err != nil {
+			return fmt.Errorf("waiting for fresh work: %w", err)
+		}
+
+		log.Debug(strings.TrimSuffix(string(result), "\n"))
+		resp, err := s.Unmarshal(result)
+		if err != nil {
+			log.Error(err)
+			continue
+		}
+		switch r := resp.(type) {
+		case *BasicReply:
+			s.handleResponse(resp)
+			id := r.ID.(uint64)
+			switch id {
+			case s.authID:
+				if !r.Result {
+					return fmt.Errorf("%w: %s", errAuthorizationRejected, r.Error.ErrStr)
+				}
+				authorized = true
+			case s.subID:
+				if !r.Result {
+					return fmt.Errorf("subscription rejected: %s", r.Error.ErrStr)
+				}
+			}
+		case *SubscribeReply:
+			subscribed = true
+			s.handleResponse(resp)
+		case NotifyRes:
+			n := r
+			notify = &n
+		case StratumMsg:
+			if r.Method == "client.reconnect" {
+				if err := s.applyReconnect(r); err != nil {
+					return err
+				}
+				return errReconnectRequested
+			}
+			s.handleResponse(resp)
+		default:
+			s.handleResponse(resp)
+		}
+	}
+	s.handleResponse(*notify)
+	if err := conn.SetReadDeadline(time.Time{}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Stratum) reconnectUntilReady() error {
 	for {
 		if err := s.Reconnect(); err != nil {
+			if errors.Is(err, errAuthorizationRejected) {
+				return err
+			}
 			log.Errorf("Reconnect failed: %v. Retrying in %v.", err, reconnectRetryDelay)
 			time.Sleep(reconnectRetryDelay)
 			continue
 		}
 		log.Info("Reconnected.")
-		return
+		return nil
 	}
+}
+
+func readStratumMessage(reader *bufio.Reader) ([]byte, error) {
+	message, err := reader.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return nil, errStratumMessageTooLong
+	}
+	return message, err
 }
 
 // Listen is the listener for the incoming messages from the stratum pool.
@@ -379,30 +508,42 @@ func (s *Stratum) Listen() {
 	log.Debug("Starting Listener")
 
 	for {
-		result, err := s.Reader.ReadString('\n')
+		result, err := readStratumMessage(s.Reader)
 		if err != nil {
 			log.Errorf("Connection lost: %v. Reconnecting.", err)
-			s.reconnectUntilReady()
+			if err := s.reconnectUntilReady(); err != nil {
+				select {
+				case s.Errors <- err:
+				default:
+				}
+				return
+			}
 			continue
 		}
 
-		log.Debug(strings.TrimSuffix(result, "\n"))
-		resp, err := s.Unmarshal([]byte(result))
+		log.Debug(strings.TrimSuffix(string(result), "\n"))
+		resp, err := s.Unmarshal(result)
 		if err != nil {
 			log.Error(err)
 			continue
 		}
 
-		s.handleResponse(resp)
+		if err := s.handleResponse(resp); err != nil {
+			select {
+			case s.Errors <- err:
+			default:
+			}
+			return
+		}
 	}
 }
 
-func (s *Stratum) handleResponse(resp interface{}) {
+func (s *Stratum) handleResponse(resp interface{}) error {
 	switch resp.(type) {
 	case *BasicReply:
 		s.handleBasicReply(resp)
 	case StratumMsg:
-		s.handleStratumMsg(resp)
+		return s.handleStratumMsg(resp)
 	case NotifyRes:
 		s.handleNotifyRes(resp)
 	case *SubscribeReply:
@@ -410,6 +551,7 @@ func (s *Stratum) handleResponse(resp interface{}) {
 	default:
 		log.Info("Unhandled message: ", resp)
 	}
+	return nil
 }
 
 func (s *Stratum) handleBasicReply(resp interface{}) {
@@ -436,7 +578,7 @@ func (s *Stratum) handleBasicReply(resp interface{}) {
 	}
 }
 
-func (s *Stratum) handleStratumMsg(resp interface{}) {
+func (s *Stratum) handleStratumMsg(resp interface{}) error {
 	nResp := resp.(StratumMsg)
 	log.Trace(nResp)
 	// Too much is still handled in unmarshaler.  Need to
@@ -446,15 +588,10 @@ func (s *Stratum) handleStratumMsg(resp interface{}) {
 		log.Info(nResp.Params)
 	case "client.reconnect":
 		log.Debug("Reconnect requested")
-		wait, err := strconv.Atoi(nResp.Params[2])
-		if err != nil {
-			log.Error(err)
-			return
+		if err := s.applyReconnect(nResp); err != nil {
+			return err
 		}
-		time.Sleep(time.Duration(wait) * time.Second)
-		pool := nResp.Params[0] + ":" + nResp.Params[1]
-		s.cfg.Pool = pool
-		s.reconnectUntilReady()
+		return s.reconnectUntilReady()
 
 	case "client.get_version":
 		log.Debug("get_version request received.")
@@ -466,25 +603,44 @@ func (s *Stratum) handleStratumMsg(resp interface{}) {
 		m, err := json.Marshal(msg)
 		if err != nil {
 			log.Error(err)
-			return
+			return nil
 		}
-		_, err = s.Conn.Write(m)
+		s.Lock()
+		err = writeStratumMessage(s.Conn, m)
+		if err != nil && s.Conn != nil {
+			_ = s.Conn.Close()
+		}
+		s.Unlock()
 		if err != nil {
 			log.Error(err)
-			return
-		}
-		_, err = s.Conn.Write([]byte("\n"))
-		if err != nil {
-			log.Error(err)
-			return
 		}
 	}
+	return nil
+}
+
+func (s *Stratum) applyReconnect(resp StratumMsg) error {
+	if len(resp.Params) < 3 {
+		return errJsonType
+	}
+	wait, err := strconv.ParseUint(resp.Params[2], 10, 64)
+	if err != nil || wait > uint64((1<<63-1)/int64(time.Second)) {
+		return errJsonType
+	}
+	time.Sleep(time.Duration(wait) * time.Second)
+	s.Lock()
+	s.cfg.Pool = net.JoinHostPort(resp.Params[0], resp.Params[1])
+	s.Unlock()
+	return nil
 }
 
 func (s *Stratum) handleNotifyRes(resp interface{}) {
 	s.Lock()
 	defer s.Unlock()
 	nResp := resp.(NotifyRes)
+	if err := validateNotify(nResp); err != nil {
+		log.Errorf("Ignoring invalid notify: %v", err)
+		return
+	}
 	s.PoolWork.JobID = nResp.JobID
 	s.PoolWork.CB1 = nResp.GenTX1
 	heightHex := nResp.GenTX1[186:188] + nResp.GenTX1[184:186]
@@ -516,6 +672,8 @@ func (s *Stratum) handleNotifyRes(resp interface{}) {
 }
 
 func (s *Stratum) handleSubscribeReply(resp interface{}) {
+	s.Lock()
+	defer s.Unlock()
 	nResp := resp.(*SubscribeReply)
 	s.PoolWork.ExtraNonce1 = nResp.ExtraNonce1
 	s.PoolWork.ExtraNonce2Length = nResp.ExtraNonce2Length
@@ -523,8 +681,34 @@ func (s *Stratum) handleSubscribeReply(resp interface{}) {
 	log.Trace(spew.Sdump(resp))
 }
 
+func writeStratumMessage(conn net.Conn, message []byte) (err error) {
+	if conn == nil {
+		return errors.New("stratum connection is closed")
+	}
+	if err := conn.SetWriteDeadline(time.Now().Add(reconnectRetryDelay)); err != nil {
+		return err
+	}
+	defer func() {
+		if clearErr := conn.SetWriteDeadline(time.Time{}); err == nil {
+			err = clearErr
+		}
+	}()
+	message = append(message, '\n')
+	n, err := conn.Write(message)
+	if err == nil && n != len(message) {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
 // Auth sends a message to the pool to authorize a worker.
 func (s *Stratum) Auth() error {
+	s.Lock()
+	defer s.Unlock()
+	return s.auth()
+}
+
+func (s *Stratum) auth() error {
 	msg := StratumMsg{
 		Method: "mining.authorize",
 		ID:     s.ID,
@@ -543,19 +727,17 @@ func (s *Stratum) Auth() error {
 	if err != nil {
 		return err
 	}
-	_, err = s.Conn.Write(m)
-	if err != nil {
-		return err
-	}
-	_, err = s.Conn.Write([]byte("\n"))
-	if err != nil {
-		return err
-	}
-	return nil
+	return writeStratumMessage(s.Conn, m)
 }
 
 // Subscribe sends the subscribe message to get mining info for a worker.
 func (s *Stratum) Subscribe() error {
+	s.Lock()
+	defer s.Unlock()
+	return s.subscribe()
+}
+
+func (s *Stratum) subscribe() error {
 	msg := StratumMsg{
 		Method: "mining.subscribe",
 		ID:     s.ID,
@@ -568,15 +750,7 @@ func (s *Stratum) Subscribe() error {
 		return err
 	}
 	log.Tracef("%v", string(m))
-	_, err = s.Conn.Write(m)
-	if err != nil {
-		return err
-	}
-	_, err = s.Conn.Write([]byte("\n"))
-	if err != nil {
-		return err
-	}
-	return nil
+	return writeStratumMessage(s.Conn, m)
 }
 
 // Unmarshal provides a json unmarshaler for the commands.
@@ -614,67 +788,46 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 		return unmarshalBasicReply(objmap)
 	}
 	if id == s.subID {
-		var resi []interface{}
-		err := json.Unmarshal(objmap["result"], &resi)
-		if err != nil {
-			return nil, err
-		}
-		log.Trace(resi)
-		resp := &SubscribeReply{}
-
-		var objmap2 map[string]json.RawMessage
-		err = json.Unmarshal(blob, &objmap2)
-		if err != nil {
-			return nil, err
-		}
-
 		var resJS []json.RawMessage
-		err = json.Unmarshal(objmap["result"], &resJS)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(resJS) == 0 {
+		rawResult, ok := objmap["result"]
+		if !ok {
 			return nil, errJsonType
 		}
-
-		var msgPeak []interface{}
-		err = json.Unmarshal(resJS[0], &msgPeak)
-		if err != nil {
+		if bytes.Equal(rawResult, []byte("null")) || bytes.Equal(rawResult, []byte("false")) {
+			return unmarshalBasicReply(objmap)
+		}
+		if err := json.Unmarshal(rawResult, &resJS); err != nil {
 			return nil, err
 		}
-
-		// The pools do not all agree on what this message looks like
-		// so we need to actually look at it before unmarshalling for
-		// real so we can use the right form.  Yuck.
-		if msgPeak[0] == "mining.notify" {
-			var innerMsg []string
-			err = json.Unmarshal(resJS[0], &innerMsg)
-			if err != nil {
-				return nil, err
-			}
-			resp.SubscribeID = innerMsg[1]
-		} else {
-			var innerMsg = resi[0].([]interface{})
-			for i := 0; i < len(innerMsg); i++ {
-				msg := innerMsg[i].([]interface{})
-				if msg[0] == "mining.notify" {
-					resp.SubscribeID = msg[1].(string)
-				}
-				if msg[0] == "mining.set_difficulty" {
-					// Not all pools correctly put something
-					// in here so we will ignore it (we
-					// already have the default value of 1
-					// anyway and pool can send a new one.
-					// dcr.coinmine.pl puts something that
-					// is not a difficulty here which is why
-					// we ignore.
-				}
-			}
+		if len(resJS) < 3 {
+			return nil, errJsonType
 		}
-
-		resp.ExtraNonce1 = resi[1].(string)
-		resp.ExtraNonce2Length = resi[2].(float64)
+		var subscriptions []json.RawMessage
+		if err := json.Unmarshal(resJS[0], &subscriptions); err != nil {
+			return nil, err
+		}
+		if len(subscriptions) == 0 {
+			return nil, errJsonType
+		}
+		resp := &SubscribeReply{}
+		if err := json.Unmarshal(resJS[1], &resp.ExtraNonce1); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(resJS[2], &resp.ExtraNonce2Length); err != nil {
+			return nil, err
+		}
+		extraNonce1, err := hex.DecodeString(resp.ExtraNonce1)
+		if err != nil {
+			return nil, fmt.Errorf("invalid extra nonce 1: %w", err)
+		}
+		if len(extraNonce1) > 32 {
+			return nil, errors.New("invalid extra nonce lengths")
+		}
+		extraNonce2Length := uint32(resp.ExtraNonce2Length)
+		if resp.ExtraNonce2Length != float64(extraNonce2Length) ||
+			extraNonce2Length > uint32(32-len(extraNonce1)) {
+			return nil, errors.New("invalid extra nonce lengths")
+		}
 		return resp, nil
 	}
 	if sliceContains(s.submitIDs, id) {
@@ -683,98 +836,74 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 	switch method {
 	case "mining.notify":
 		log.Trace("Unmarshal mining.notify")
-		var resi []interface{}
-		err := json.Unmarshal(objmap["params"], &resi)
-		if err != nil {
+		var params []json.RawMessage
+		if err := json.Unmarshal(objmap["params"], &params); err != nil {
 			return nil, err
 		}
-		var nres = NotifyRes{}
-		jobID, ok := resi[0].(string)
-		if !ok {
+		if len(params) < 9 {
 			return nil, errJsonType
 		}
-		nres.JobID = jobID
-		hash, ok := resi[1].(string)
-		if !ok {
-			return nil, errJsonType
+		nres := NotifyRes{}
+		fields := []interface{}{
+			&nres.JobID,
+			&nres.Hash,
+			&nres.GenTX1,
+			&nres.GenTX2,
+			&nres.MerkleBranches,
+			&nres.BlockVersion,
+			&nres.Nbits,
+			&nres.Ntime,
+			&nres.CleanJobs,
 		}
-		nres.Hash = hash
-		genTX1, ok := resi[2].(string)
-		if !ok {
-			return nil, errJsonType
+		for i := range fields {
+			if err := json.Unmarshal(params[i], fields[i]); err != nil {
+				return nil, err
+			}
 		}
-		nres.GenTX1 = genTX1
-		genTX2, ok := resi[3].(string)
-		if !ok {
-			return nil, errJsonType
+		if err := validateNotify(nres); err != nil {
+			return nil, err
 		}
-		nres.GenTX2 = genTX2
-		//ccminer code also confirms this
-		//nres.MerkleBranches = resi[4].([]string)
-		blockVersion, ok := resi[5].(string)
-		if !ok {
-			return nil, errJsonType
-		}
-		nres.BlockVersion = blockVersion
-		nbits, ok := resi[6].(string)
-		if !ok {
-			return nil, errJsonType
-		}
-		nres.Nbits = nbits
-		ntime, ok := resi[7].(string)
-		if !ok {
-			return nil, errJsonType
-		}
-		nres.Ntime = ntime
-		cleanJobs, ok := resi[8].(bool)
-		if !ok {
-			return nil, errJsonType
-		}
-		nres.CleanJobs = cleanJobs
 		return nres, nil
 
 	case "mining.set_difficulty":
 		log.Trace("Received new difficulty.")
-		var resi []interface{}
-		err := json.Unmarshal(objmap["params"], &resi)
-		if err != nil {
+		var params []json.RawMessage
+		if err := json.Unmarshal(objmap["params"], &params); err != nil {
 			return nil, err
 		}
-
-		difficulty, ok := resi[0].(float64)
-		if !ok {
+		if len(params) != 1 {
 			return nil, errJsonType
 		}
-		s.Target, err = util.DiffToTarget(difficulty, chainParams.PowLimit)
+		var difficulty float64
+		if err := json.Unmarshal(params[0], &difficulty); err != nil {
+			return nil, err
+		}
+		target, err := util.DiffToTarget(difficulty, chainParams.PowLimit)
 		if err != nil {
 			return nil, err
 		}
+		s.Target = target
 		s.Diff = difficulty
 		var nres = StratumMsg{}
 		nres.Method = method
 		diffStr := strconv.FormatFloat(difficulty, 'E', -1, 32)
-		var params []string
-		params = append(params, diffStr)
-		nres.Params = params
+		nres.Params = []string{diffStr}
 		log.Infof("Stratum difficulty set to %v", difficulty)
 		return nres, nil
 
 	case "client.show_message":
-		var resi []interface{}
-		err := json.Unmarshal(objmap["result"], &resi)
-		if err != nil {
+		rawParams, ok := objmap["params"]
+		if !ok {
+			rawParams = objmap["result"]
+		}
+		var params []string
+		if err := json.Unmarshal(rawParams, &params); err != nil {
 			return nil, err
 		}
-		msg, ok := resi[0].(string)
-		if !ok {
+		if len(params) != 1 {
 			return nil, errJsonType
 		}
-		var nres = StratumMsg{}
-		nres.Method = method
-		var params []string
-		params = append(params, msg)
-		nres.Params = params
-		return nres, nil
+		return StratumMsg{Method: method, Params: params}, nil
 
 	case "client.get_version":
 		var nres = StratumMsg{}
@@ -788,41 +917,36 @@ func (s *Stratum) Unmarshal(blob []byte) (interface{}, error) {
 		return nres, nil
 
 	case "client.reconnect":
-		var nres = StratumMsg{}
+		var nres StratumMsg
 		var id uint64
-		err = json.Unmarshal(objmap["id"], &id)
-		if err != nil {
+		if err := json.Unmarshal(objmap["id"], &id); err != nil {
 			return nil, err
 		}
 		nres.Method = method
 		nres.ID = id
 
-		var resi []interface{}
-		err := json.Unmarshal(objmap["params"], &resi)
-		if err != nil {
+		var params []json.RawMessage
+		if err := json.Unmarshal(objmap["params"], &params); err != nil {
 			return nil, err
 		}
-		log.Trace(resi)
-
-		if len(resi) < 3 {
+		if len(params) < 3 {
 			return nil, errJsonType
 		}
-		hostname, ok := resi[0].(string)
-		if !ok {
+		var hostname string
+		if err := json.Unmarshal(params[0], &hostname); err != nil {
+			return nil, err
+		}
+		var port, wait uint64
+		if err := json.Unmarshal(params[1], &port); err != nil {
+			return nil, err
+		}
+		if port == 0 || port > 65535 {
 			return nil, errJsonType
 		}
-		p, ok := resi[1].(float64)
-		if !ok {
-			return nil, errJsonType
+		if err := json.Unmarshal(params[2], &wait); err != nil {
+			return nil, err
 		}
-		port := strconv.Itoa(int(p))
-		w, ok := resi[2].(float64)
-		if !ok {
-			return nil, errJsonType
-		}
-		wait := strconv.Itoa(int(w))
-
-		nres.Params = []string{hostname, port, wait}
+		nres.Params = []string{hostname, strconv.FormatUint(port, 10), strconv.FormatUint(wait, 10)}
 
 		return nres, nil
 
@@ -849,6 +973,9 @@ func (s *Stratum) PrepWork() error {
 	if err != nil {
 		log.Error("Error decoding Coinbase pt 1.")
 		return err
+	}
+	if len(cb1) < minCoinbase1Size {
+		return fmt.Errorf("coinbase part 1 is %d bytes, need at least %d", len(cb1), minCoinbase1Size)
 	}
 
 	cb2, err := hex.DecodeString(s.PoolWork.CB2)
@@ -928,9 +1055,9 @@ func (s *Stratum) PrepSubmit(data []byte, jobID string) (Submit, error) {
 		return sub, ErrStratumStaleWork
 	}
 
-	s.ID++
 	sub.ID = s.ID
 	s.submitIDs = append(s.submitIDs, s.ID)
+	s.ID++
 
 	// The timestamp string should be:
 	//
