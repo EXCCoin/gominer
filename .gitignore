@@ -41,6 +41,7 @@ obj/
 *.lib
 *.pdb
 .*
+!.github/
 gominer-wgpu
 /gominer-hip
 eqwgpu1445/target/

@@ -7,8 +7,9 @@ package main
 // eq_create/eq_solve/eq_destroy ABI as the CUDA library.
 
 /*
-#cgo LDFLAGS: -L. -leqwgpu1445 -ldl -lpthread -lm
-#cgo darwin LDFLAGS: -framework Metal -framework QuartzCore
+#cgo linux LDFLAGS: -L. -leqwgpu1445 -ldl -lpthread -lm
+#cgo darwin LDFLAGS: -L. -leqwgpu1445 -framework Metal -framework QuartzCore
+#cgo windows LDFLAGS: -L. -leqwgpu1445
 #include <stdint.h>
 extern uint32_t eq_adapter_count();
 extern int eq_adapter_name(uint32_t index, char *buf, uint32_t len);
