@@ -1,0 +1,94 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            archive: tar.gz
+          - os: windows-2025
+            platform: windows
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build and package Linux amd64
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          ./build-wgpu.sh
+          go test -tags wgpu ./...
+          stage="gominer-${GITHUB_REF_NAME}-linux-amd64"
+          mkdir "${stage}"
+          cp gominer-wgpu README.md LICENSE sample-gominer.conf "${stage}/"
+          {
+            ./gominer-wgpu -V
+            printf 'Commit: %s\n' "${GITHUB_SHA}"
+            go version
+            rustc --version
+          } > "${stage}/BUILDINFO.txt"
+          tar -czf "${stage}.tar.gz" "${stage}"
+
+      - name: Build and package Windows amd64
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./build-wgpu.ps1
+          $env:Path = "$pwd;$env:Path"
+          go test -tags wgpu ./...
+          $stage = "gominer-$env:GITHUB_REF_NAME-windows-amd64"
+          New-Item -ItemType Directory $stage
+          Copy-Item gominer-wgpu.exe,eqwgpu1445.dll,README.md,LICENSE,sample-gominer.conf $stage
+          @(
+            ./gominer-wgpu.exe -V
+            "Commit: $env:GITHUB_SHA"
+            go version
+            rustc --version
+          ) | Set-Content "$stage/BUILDINFO.txt"
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gominer-${{ matrix.platform }}-amd64
+          path: gominer-*.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          pattern: gominer-*-amd64
+          path: dist
+          merge-multiple: true
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum gominer-*.tar.gz gominer-*.zip > SHA256SUMS
+          gh release create "${GITHUB_REF_NAME}" ./* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "gominer ${GITHUB_REF_NAME}" \
+            --generate-notes \
+            --prerelease \
+            --verify-tag
