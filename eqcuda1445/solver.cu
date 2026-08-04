@@ -51,6 +51,8 @@ extern "C" void eq_dump_phase_timing(void) {
 #endif
 
 verify_code equihash_verify_uncompressed(const char *header, u32 header_len, const proof indices) {
+    if (!header || !indices || header_len != 180)
+        return verify_code::POW_HEADER_LENGTH;
     if (duped(indices))
         return verify_code::POW_DUPLICATE;
 
@@ -66,6 +68,8 @@ extern "C" int equihash_verify_uncompressed_c(const char *header, u32 header_len
 }
 
 extern "C" int equihash_verify_c(const char *header, u32 header_len, const unsigned char *solution) {
+    if (!solution)
+        return static_cast<int>(verify_code::POW_HEADER_LENGTH);
     proof sol;
     uncompress_solution(solution, sol);
     return static_cast<int>(equihash_verify_uncompressed(header, header_len, sol));

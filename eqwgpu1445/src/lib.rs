@@ -652,7 +652,7 @@ pub unsafe extern "C" fn eq_solve(
     on_solution: Option<SolutionCb>,
     user_data: *mut c_void,
 ) -> i32 {
-    if solver.is_null() || header.is_null() {
+    if solver.is_null() || header.is_null() || header_len as usize != HEADER_LEN {
         return -1;
     }
     let s = &*solver;
@@ -843,10 +843,28 @@ mod tests {
             unsafe { equihash_verify_c(std::ptr::null(), 0, std::ptr::null()) },
             -1
         );
+        let byte = 0u8;
+        assert_eq!(
+            unsafe {
+                eq_solve(
+                    std::ptr::NonNull::<EqSolver>::dangling().as_ptr(),
+                    std::ptr::from_ref(&byte).cast(),
+                    1,
+                    0,
+                    None,
+                    std::ptr::null_mut(),
+                )
+            },
+            -1
+        );
     }
 
     #[test]
     fn gpu_solutions_verify() {
+        if adapters().is_empty() {
+            eprintln!("no GPU adapter available; skipping GPU solution check");
+            return;
+        }
         let mut header = [0x42u8; HEADER_LEN];
         let s = create_solver(0).expect("create solver");
         let mut total = 0;

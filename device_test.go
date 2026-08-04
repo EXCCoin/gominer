@@ -3,15 +3,35 @@ package main
 import (
 	"encoding/hex"
 	"errors"
+	"math"
 	"math/big"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/EXCCoin/exccd/wire"
+	"github.com/EXCCoin/gominer/stratum"
 	"github.com/EXCCoin/gominer/work"
 	"github.com/btcsuite/btclog"
 )
+
+func TestStartupStatusRatesAreFinite(t *testing.T) {
+	started := uint32(time.Now().Unix())
+	d := &Device{started: started}
+	rate, _, _ := d.Status()
+	if rate != 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		t.Fatalf("device rate = %v, want 0", rate)
+	}
+
+	oldCfg := cfg
+	cfg = &config{Pool: "stratum+tcp://pool.example:1234"}
+	defer func() { cfg = oldCfg }()
+	m := &Miner{started: started, pool: &stratum.Stratum{}}
+	_, _, _, _, utility := m.Status()
+	if utility != 0 || math.IsNaN(utility) || math.IsInf(utility, 0) {
+		t.Fatalf("pool utility = %v, want 0", utility)
+	}
+}
 
 func TestSendOrQuitStopsBlockedSend(t *testing.T) {
 	quit := make(chan struct{})

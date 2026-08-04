@@ -219,9 +219,6 @@ func (m *Miner) printStatsThread() {
 		for _, d := range m.devices {
 			d.UpdateFanTemp()
 			d.PrintStats()
-			if d.fanControlActive {
-				d.fanControl()
-			}
 		}
 	}
 }
@@ -322,7 +319,10 @@ func (m *Miner) Status() (uint64, uint64, uint64, uint64, float64) {
 		total := valid + rejected + stale
 
 		secondsElapsed := uint32(time.Now().Unix()) - m.started
-		utility := float64(valid) / (float64(secondsElapsed) / float64(60))
+		utility := float64(0)
+		if secondsElapsed != 0 {
+			utility = float64(valid) / (float64(secondsElapsed) / float64(60))
+		}
 
 		return valid, rejected, stale, total, utility
 	}

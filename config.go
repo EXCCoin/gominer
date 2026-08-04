@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/EXCCoin/exccd/chaincfg/v3"
 	"github.com/EXCCoin/exccd/dcrutil/v4"
@@ -29,7 +28,6 @@ const (
 	defaultLogLevel       = "info"
 	defaultLogDirname     = "logs"
 	defaultLogFilename    = "gominer.log"
-	defaultClKernel       = "blake256.cl"
 )
 
 var (
@@ -44,13 +42,8 @@ var (
 	defaultAPIHost        = "localhost"
 	defaultAPIPort        = "3333"
 	defaultLogDir         = filepath.Join(minerHomeDir, defaultLogDirname)
-	defaultAutocalibrate  = 500
 
-	minIntensity  = 8
-	maxIntensity  = 31
-	minTempTarget = uint32(60)
-	maxTempTarget = uint32(84)
-	maxWorkSize   = uint32(0xFFFFFFFF - 255)
+	maxWorkSize = uint32(0xFFFFFFFF - 255)
 )
 
 type config struct {
@@ -58,11 +51,9 @@ type config struct {
 	ShowVersion bool `short:"V" long:"version" description:"Display version information and exit"`
 
 	// Config / log options
-	Experimental bool   `long:"experimental" description:"enable EXPERIMENTAL features such as setting a temperature target with (-t/--temptarget) which may DAMAGE YOUR DEVICE(S)."`
-	ConfigFile   string `short:"C" long:"configfile" description:"Path to configuration file"`
-	LogDir       string `long:"logdir" description:"Directory to log output."`
-	DebugLevel   string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
-	ClKernel     string `short:"k" long:"kernel" description:"File with cl kernel to use"`
+	ConfigFile string `short:"C" long:"configfile" description:"Path to configuration file"`
+	LogDir     string `long:"logdir" description:"Directory to log output."`
+	DebugLevel string `short:"d" long:"debuglevel" description:"Logging level for all subsystems {trace, debug, info, warn, error, critical} -- You may also specify <subsystem>=<level>,<subsystem2>=<level>,... to set the log level for individual subsystems -- Use show to list available subsystems"`
 
 	// Debugging options
 	Profile    string `long:"profile" description:"Enable HTTP profiling on given port -- NOTE port must be between 1024 and 65536"`
@@ -88,17 +79,11 @@ type config struct {
 	SimNet        bool `long:"simnet" description:"Connect to the simulation test network"`
 	TLSSkipVerify bool `long:"skipverify" description:"Do not verify tls certificates (not recommended!)"`
 
-	Autocalibrate     string `short:"A" long:"autocalibrate" description:"Time target in milliseconds to spend executing hashes on the device during each iteration. Single global value or a comma separated list."`
-	AutocalibrateInts []int
-	Devices           string `short:"D" long:"devices" description:"Single device ID or a comma separated list of device IDs to use."`
-	DeviceIDs         []int
-	Instances         int    `short:"I" long:"instances" description:"Concurrent solver instances per device (~3GB for the native solver; backend-specific default)."`
-	Intensity         string `short:"i" long:"intensity" description:"Intensities (the work size is 2^intensity) per device. Single global value or a comma separated list."`
-	IntensityInts     []int
-	TempTarget        string `short:"t" long:"temptarget" description:"Target temperature in Celsius to maintain via automatic fan control. (Requires --experimental flag)"`
-	TempTargetInts    []uint32
-	WorkSize          string `short:"W" long:"worksize" description:"The explicitly declared sizes of the work to do per device (overrides intensity). Single global value or a comma separated list."`
-	WorkSizeInts      []uint32
+	Devices      string `short:"D" long:"devices" description:"Single device ID or a comma separated list of device IDs to use."`
+	DeviceIDs    []int
+	Instances    int    `short:"I" long:"instances" description:"Concurrent solver instances per device (~3GB for the native solver; backend-specific default)."`
+	WorkSize     string `short:"W" long:"worksize" description:"Explicit solver work size per device. Single global value or a comma separated list."`
+	WorkSizeInts []uint32
 
 	// Pool related options
 	Pool         string `short:"o" long:"pool" description:"Pool to connect to (e.g.stratum+tcp://pool:port)"`
@@ -255,7 +240,6 @@ func loadConfig() (*config, []string, error) {
 		LogDir:     defaultLogDir,
 		RPCServer:  defaultRPCServer,
 		RPCCert:    defaultRPCCertFile,
-		ClKernel:   defaultClKernel,
 	}
 
 	// Create the home directory if it doesn't already exist.
@@ -337,42 +321,6 @@ func loadConfig() (*config, []string, error) {
 		chainParams = chaincfg.SimNetParams()
 	}
 
-	// Check the autocalibrations if the user is setting that.
-	if len(cfg.Autocalibrate) > 0 {
-		// Parse a list like -A 450,600
-		if strings.Contains(cfg.Autocalibrate, ",") {
-			specifiedAutocalibrates := strings.Split(cfg.Autocalibrate, ",")
-			cfg.AutocalibrateInts = make([]int, len(specifiedAutocalibrates))
-			for i := range specifiedAutocalibrates {
-				j, err := strconv.Atoi(specifiedAutocalibrates[i])
-				if err != nil {
-					err := fmt.Errorf("Could not convert autocalibration "+
-						"(%v) to int: %s", specifiedAutocalibrates[i],
-						err.Error())
-					fmt.Fprintln(os.Stderr, err)
-					return nil, nil, err
-				}
-
-				cfg.AutocalibrateInts[i] = j
-			}
-			// Use specified device like -A 600
-		} else {
-			cfg.AutocalibrateInts = make([]int, 1)
-			i, err := strconv.Atoi(cfg.Autocalibrate)
-			if err != nil {
-				err := fmt.Errorf("Could not convert autocalibration %v "+
-					"to int: %s", cfg.Autocalibrate, err.Error())
-				fmt.Fprintln(os.Stderr, err)
-				return nil, nil, err
-			}
-
-			cfg.AutocalibrateInts[0] = i
-		}
-		// Apply default
-	} else {
-		cfg.AutocalibrateInts = []int{defaultAutocalibrate}
-	}
-
 	// Check the devices if the user is setting that.
 	if len(cfg.Devices) > 0 {
 		// Parse a list like -D 1,2
@@ -403,112 +351,6 @@ func loadConfig() (*config, []string, error) {
 			}
 
 			cfg.DeviceIDs[0] = i
-		}
-	}
-
-	// Check the intensity if the user is setting that.
-	if len(cfg.Intensity) > 0 {
-		// Parse a list like -i 29,30
-		if strings.Contains(cfg.Intensity, ",") {
-			specifiedIntensities := strings.Split(cfg.Intensity, ",")
-			cfg.IntensityInts = make([]int, len(specifiedIntensities))
-			for i := range specifiedIntensities {
-				j, err := strconv.Atoi(specifiedIntensities[i])
-				if err != nil {
-					err := fmt.Errorf("Could not convert intensity "+
-						"(%v) to int: %s", specifiedIntensities[i],
-						err.Error())
-					fmt.Fprintln(os.Stderr, err)
-					return nil, nil, err
-				}
-
-				cfg.IntensityInts[i] = j
-			}
-			// Use specified intensity like -i 29
-		} else {
-			cfg.IntensityInts = make([]int, 1)
-			i, err := strconv.Atoi(cfg.Intensity)
-			if err != nil {
-				err := fmt.Errorf("Could not convert intensity %v "+
-					"to int: %s", cfg.Intensity, err.Error())
-				fmt.Fprintln(os.Stderr, err)
-				return nil, nil, err
-			}
-
-			cfg.IntensityInts[0] = i
-		}
-	}
-
-	for i := range cfg.IntensityInts {
-		if (cfg.IntensityInts[i] < minIntensity) ||
-			(cfg.IntensityInts[i] > maxIntensity) {
-			err := fmt.Errorf("Intensity %v not within "+
-				"range %v to %v.", cfg.IntensityInts[i], minIntensity,
-				maxIntensity)
-			fmt.Fprintln(os.Stderr, err)
-			return nil, nil, err
-		}
-	}
-
-	// Check the temptarget if the user is setting that.
-	if len(cfg.TempTarget) > 0 {
-		if !cfg.Experimental {
-			err := fmt.Errorf("temperature targets / automatic fan control " +
-				"is an EXPERIMENTAL feature and requires the --experimental " +
-				"flag to acknowledge that you accept the risk of possibly " +
-				"DAMAGING YOUR DEVICE(S) due to software bugs")
-			fmt.Fprintln(os.Stderr, err)
-			return nil, nil, err
-		}
-		// Parse a list like -t 80,75
-		if strings.Contains(cfg.TempTarget, ",") {
-			specifiedTempTargets := strings.Split(cfg.TempTarget, ",")
-			cfg.TempTargetInts = make([]uint32, len(specifiedTempTargets))
-			for i := range specifiedTempTargets {
-				j, err := strconv.Atoi(specifiedTempTargets[i])
-				if err != nil {
-					err := fmt.Errorf("Could not convert temptarget "+
-						"(%v) to int: %s", specifiedTempTargets[i],
-						err.Error())
-					fmt.Fprintln(os.Stderr, err)
-					return nil, nil, err
-				}
-
-				cfg.TempTargetInts[i] = uint32(j)
-			}
-			// Use specified temptarget like -t 75
-		} else {
-			cfg.TempTargetInts = make([]uint32, 1)
-			i, err := strconv.Atoi(cfg.TempTarget)
-			if err != nil {
-				err := fmt.Errorf("Could not convert temptarget %v "+
-					"to int: %s", cfg.TempTarget, err.Error())
-				fmt.Fprintln(os.Stderr, err)
-				return nil, nil, err
-			}
-
-			cfg.TempTargetInts[0] = uint32(i)
-		}
-	}
-
-	if cfg.Experimental {
-		fmt.Fprintln(os.Stderr, "enabling EXPERIMENTAL features "+
-			"that may possibly DAMAGE YOUR DEVICE(S)")
-		time.Sleep(time.Second * 3)
-	}
-
-	for i := range cfg.TempTargetInts {
-		if cfg.TempTargetInts[i] < minTempTarget {
-			err := fmt.Errorf("Temp target %v is lower than minimum %v",
-				cfg.TempTargetInts[i], minTempTarget)
-			fmt.Fprintln(os.Stderr, err)
-			return nil, nil, err
-		}
-		if cfg.TempTargetInts[i] > maxTempTarget {
-			err := fmt.Errorf("Temp target %v is higher than maximum %v",
-				cfg.TempTargetInts[i], maxTempTarget)
-			fmt.Fprintln(os.Stderr, err)
-			return nil, nil, err
 		}
 	}
 

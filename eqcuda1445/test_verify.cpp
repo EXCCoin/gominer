@@ -59,6 +59,11 @@ static int test_device(int device) {
 }
 
 int main() {
+    if (equihash_verify_c(nullptr, 0, nullptr) == 0) {
+        printf("Verifier accepted invalid pointers\n");
+        return 1;
+    }
+
     int count = 0;
     cudaError_t err = cudaGetDeviceCount(&count);
     if (err != cudaSuccess) {

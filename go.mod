@@ -13,7 +13,6 @@ require (
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd
 	github.com/davecgh/go-spew v1.1.1
 	github.com/jrick/logrotate v1.0.0
-	github.com/mattn/go-pointer v0.0.1
 )
 
 require (
@@ -28,5 +27,6 @@ require (
 	github.com/agl/ed25519 v0.0.0-20170116200512-5312a6153412 // indirect
 	github.com/dchest/siphash v1.2.3 // indirect
 	github.com/decred/slog v1.2.0 // indirect
+	github.com/mattn/go-pointer v0.0.1 // indirect
 	golang.org/x/crypto v0.15.0 // indirect
 )

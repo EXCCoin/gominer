@@ -39,7 +39,7 @@ func ReverseToInt(s string) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
-	i, err := strconv.ParseInt(sRev, 10, 32)
+	i, err := strconv.ParseUint(sRev, 16, 32)
 	return int32(i), err
 }
 
@@ -58,9 +58,8 @@ func RevHash(hash string) string {
 
 // DiffToTarget converts a whole number difficulty into a target.
 func DiffToTarget(diff float64, powLimit *big.Int) (*big.Int, error) {
-	if diff <= 0 {
-		return nil, fmt.Errorf("invalid pool difficulty %v (0 or less than "+
-			"zero passed)", diff)
+	if diff <= 0 || math.IsNaN(diff) || math.IsInf(diff, 0) || diff > math.MaxInt64 {
+		return nil, fmt.Errorf("invalid pool difficulty %v", diff)
 	}
 
 	// Round down in the case of a non-integer diff since we only support
