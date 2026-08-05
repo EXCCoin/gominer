@@ -17,14 +17,17 @@ DirectX 12 on Windows, and Metal on macOS.
 
 ## Downloads
 
-The `v1.1.1-beta` release provides portable wgpu builds for amd64:
+The `v1.1.1-beta` release provides these amd64 builds:
 
-- [Linux amd64](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-linux-amd64.tar.gz)
-- [Windows amd64](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-windows-amd64.zip)
+- [Linux CUDA](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-linux-amd64-cuda.tar.gz)
+- [Linux HIP, `gfx1151`, ROCm 6](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-linux-amd64-hip-gfx1151-rocm6.tar.gz)
+- [Linux wgpu](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-linux-amd64.tar.gz)
+- [Windows wgpu](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-windows-amd64.zip)
 - [SHA256 checksums](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/SHA256SUMS)
 
-The Windows archive includes all required DLLs. CUDA and HIP
-binaries depend on the target GPU/toolchain and are built from source.
+The CUDA binary supports Turing through Blackwell. The HIP binary is built for
+the Radeon 8060S (`gfx1151`) and requires ROCm 6. Other AMD GPUs can use wgpu
+or build HIP from source with the matching `GPU_ARCH`.
 
 ## Building
 

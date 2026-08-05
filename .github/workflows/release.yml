@@ -70,14 +70,76 @@ jobs:
           path: gominer-*.${{ matrix.archive }}
           if-no-files-found: error
 
+  native-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: cuda
+            image: nvidia/cuda:12.8.1-devel-ubuntu22.04@sha256:6617a625f4090c76c545a0e7d63f2e441718ef9af7f4efe7dd1242a29e289fd7
+            binary: gominer
+            variant: cuda
+          - backend: hip
+            image: rocm/dev-ubuntu-22.04:6.4.2@sha256:08cb76b6324b3e51e7c614841dec266c99a2c5acdf197e4428cb33cdb7ab32ed
+            binary: gominer-hip
+            variant: hip-gfx1151-rocm6
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ matrix.image }}
+      options: --user 0
+    timeout-minutes: 45
+
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates git gcc g++ binutils
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build and package Linux amd64 ${{ matrix.backend }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.backend }}" = cuda ]; then
+            stub_dir="$(dirname "$(find /usr/local/cuda -path '*/stubs/libcuda.so' -print -quit)")"
+            CGO_LDFLAGS="-L${stub_dir}" ./build.sh
+            toolchain="$(nvcc --version | tail -n 1)"
+          else
+            GPU_ARCH=gfx1151 ./build-hip.sh
+            toolchain="$(hipconfig --version)"
+          fi
+
+          stage="gominer-${GITHUB_REF_NAME}-linux-amd64-${{ matrix.variant }}"
+          mkdir "${stage}"
+          cp "${{ matrix.binary }}" README.md LICENSE sample-gominer.conf "${stage}/"
+          {
+            printf 'Version: %s\n' "${GITHUB_REF_NAME}"
+            printf 'Backend: %s\n' "${{ matrix.backend }}"
+            printf 'Variant: %s\n' "${{ matrix.variant }}"
+            printf 'Commit: %s\n' "${GITHUB_SHA}"
+            printf 'Toolchain: %s\n' "${toolchain}"
+            go version
+            go version -m "${{ matrix.binary }}"
+          } > "${stage}/BUILDINFO.txt"
+          tar -czf "${stage}.tar.gz" "${stage}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gominer-linux-amd64-${{ matrix.variant }}
+          path: gominer-*.tar.gz
+          if-no-files-found: error
+
   publish:
-    needs: build
+    needs: [build, native-linux]
     runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
-          pattern: gominer-*-amd64
+          pattern: gominer-*-amd64*
           path: dist
           merge-multiple: true
       - name: Publish GitHub release
