@@ -17,13 +17,13 @@ DirectX 12 on Windows, and Metal on macOS.
 
 ## Downloads
 
-The `v1.1.0-beta` release provides portable wgpu builds for amd64:
+The `v1.1.1-beta` release provides portable wgpu builds for amd64:
 
-- [Linux amd64](https://github.com/EXCCoin/gominer/releases/download/v1.1.0-beta/gominer-v1.1.0-beta-linux-amd64.tar.gz)
-- [Windows amd64](https://github.com/EXCCoin/gominer/releases/download/v1.1.0-beta/gominer-v1.1.0-beta-windows-amd64.zip)
-- [SHA256 checksums](https://github.com/EXCCoin/gominer/releases/download/v1.1.0-beta/SHA256SUMS)
+- [Linux amd64](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-linux-amd64.tar.gz)
+- [Windows amd64](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/gominer-v1.1.1-beta-windows-amd64.zip)
+- [SHA256 checksums](https://github.com/EXCCoin/gominer/releases/download/v1.1.1-beta/SHA256SUMS)
 
-The Windows archive includes the required `eqwgpu1445.dll`. CUDA and HIP
+The Windows archive includes all required DLLs. CUDA and HIP
 binaries depend on the target GPU/toolchain and are built from source.
 
 ## Building
@@ -82,7 +82,7 @@ Windows amd64 requires Go, Rust, and MinGW-w64 GCC:
 ./build-wgpu.ps1
 ```
 
-Keep `eqwgpu1445.dll` beside `gominer-wgpu.exe`. The
+Keep the generated DLLs beside `gominer-wgpu.exe`. The
 [`CI` workflow](.github/workflows/ci.yml) builds and tests wgpu on Linux and
 Windows amd64. CUDA and HIP tests run separately on matching hardware.
 
