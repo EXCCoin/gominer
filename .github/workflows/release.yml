@@ -55,7 +55,7 @@ jobs:
           go test -tags wgpu ./...
           $stage = "gominer-$env:GITHUB_REF_NAME-windows-amd64"
           New-Item -ItemType Directory $stage
-          Copy-Item gominer-wgpu.exe,eqwgpu1445.dll,README.md,LICENSE,sample-gominer.conf $stage
+          Copy-Item gominer-wgpu.exe,*.dll,README.md,LICENSE,sample-gominer.conf $stage
           @(
             ./gominer-wgpu.exe -V
             "Commit: $env:GITHUB_SHA"
